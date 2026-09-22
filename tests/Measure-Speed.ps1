@@ -26,12 +26,19 @@ try {
     [void]$wb.VBProject.VBComponents.Import($tmpBas)
     [void]$wb.VBProject.VBComponents.Import((Join-Path $DistDir 'CleaningForm.frm'))
     $mod = $wb.VBProject.VBComponents.Item('Cleaning_Speed').CodeModule
+    # MsgBox is shadowed exactly as in gen.py: a headless run must never put a dialog on the
+    # user's screen (Application.Visible = False does not hide a modal MsgBox).
     $mod.InsertLines($mod.CountOfLines + 1, @"
+Private Function MsgBox(Prompt As Variant, Optional Buttons As Variant, Optional Title As Variant) As Long
+End Function
 Public Function RunNow(c1 As Boolean, c2 As Boolean, c3 As Boolean, c4 As Boolean) As String
     CleaningForm.CheckBox1.Value = c1
     CleaningForm.CheckBox2.Value = c2
     CleaningForm.CheckBox3.Value = c3
     CleaningForm.CheckBox4.Value = c4
+    On Error Resume Next
+    CleaningForm.Controls("CheckBox5").Value = False   ' absent before v3.0
+    On Error GoTo 0
     CleanKeys
 End Function
 "@)

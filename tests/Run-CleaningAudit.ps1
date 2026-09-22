@@ -12,10 +12,10 @@ $AuditDir = (Resolve-Path -LiteralPath $AuditDir).Path
 $FormDir  = (Resolve-Path -LiteralPath $FormDir).Path
 
 function Unesc([string]$s) {
-    $s.Replace('{LF}', "`n").Replace('{CR}', "`r").Replace('{TAB}', "`t").Replace('{NBSP}', [string][char]0xA0).Replace('{ZWSP}', [string][char]0x200B).Replace('{ZWNJ}', [string][char]0x200C).Replace('{ZWJ}', [string][char]0x200D).Replace('{BOM}', [string][char]0xFEFF).Replace('{ENSP}', [string][char]0x2002).Replace('{THIN}', [string][char]0x2009).Replace('{IDEO}', [string][char]0x3000).Replace('{WJ}', [string][char]0x2060).Replace('{LSEP}', [string][char]0x2028).Replace('{PSEP}', [string][char]0x2029).Replace('{OGH}', [string][char]0x1680)
+    $s.Replace('{LF}', "`n").Replace('{CR}', "`r").Replace('{TAB}', "`t").Replace('{NBSP}', [string][char]0xA0).Replace('{ZWSP}', [string][char]0x200B).Replace('{ZWNJ}', [string][char]0x200C).Replace('{ZWJ}', [string][char]0x200D).Replace('{BOM}', [string][char]0xFEFF).Replace('{ENSP}', [string][char]0x2002).Replace('{THIN}', [string][char]0x2009).Replace('{IDEO}', [string][char]0x3000).Replace('{WJ}', [string][char]0x2060).Replace('{LSEP}', [string][char]0x2028).Replace('{PSEP}', [string][char]0x2029).Replace('{OGH}', [string][char]0x1680).Replace('{NEL}', [string][char]0x85).Replace('{VT}', [string][char]0x0B).Replace('{FF}', [string][char]0x0C)
 }
 function Esc([string]$s) {
-    $s.Replace("`r", '{CR}').Replace("`n", '{LF}').Replace("`t", '{TAB}').Replace([string][char]0xA0, '{NBSP}').Replace([string][char]0x200B, '{ZWSP}').Replace([string][char]0x200C, '{ZWNJ}').Replace([string][char]0x200D, '{ZWJ}').Replace([string][char]0xFEFF, '{BOM}').Replace([string][char]0x2002, '{ENSP}').Replace([string][char]0x2009, '{THIN}').Replace([string][char]0x3000, '{IDEO}').Replace([string][char]0x2060, '{WJ}').Replace([string][char]0x2028, '{LSEP}').Replace([string][char]0x2029, '{PSEP}').Replace([string][char]0x1680, '{OGH}')
+    $s.Replace("`r", '{CR}').Replace("`n", '{LF}').Replace("`t", '{TAB}').Replace([string][char]0xA0, '{NBSP}').Replace([string][char]0x200B, '{ZWSP}').Replace([string][char]0x200C, '{ZWNJ}').Replace([string][char]0x200D, '{ZWJ}').Replace([string][char]0xFEFF, '{BOM}').Replace([string][char]0x2002, '{ENSP}').Replace([string][char]0x2009, '{THIN}').Replace([string][char]0x3000, '{IDEO}').Replace([string][char]0x2060, '{WJ}').Replace([string][char]0x2028, '{LSEP}').Replace([string][char]0x2029, '{PSEP}').Replace([string][char]0x1680, '{OGH}').Replace([string][char]0x85, '{NEL}').Replace([string][char]0x0B, '{VT}').Replace([string][char]0x0C, '{FF}')
 }
 function Csv([string]$s) {
     if ($s -match '[",\r\n]') { '"' + ($s -replace '"', '""') + '"' } else { $s }
@@ -26,6 +26,12 @@ $cyrR = [string][char]0x0420; $cyrA = [string][char]0x0410; $cyrB = [string][cha
 $cyrO = [string][char]0x041E; $cyrT = [string][char]0x0422
 # ru-RU quirk (Probe-RangeQuirks.ps1): NumberFormat='General' throws here; the localized name works
 $fmtGeneral = -join ([char]0x041E,[char]0x0441,[char]0x043D,[char]0x043E,[char]0x0432,[char]0x043D,[char]0x043E,[char]0x0439)
+function Runs($c, [string]$prop) {
+    $n = $c.Characters().Count; $out = @()
+    for ($i = 1; $i -le $n; $i++) { $ch = $c.Characters($i, 1); $v = $ch.Font.GetType().InvokeMember($prop, [Reflection.BindingFlags]::GetProperty, $null, $ch.Font, $null); $out += ('[' + (Esc $ch.Text) + ']=' + $v) }
+    $out -join ' '
+}
+$failed = 0
 $log = New-Object System.Collections.Generic.List[string]
 function Log([string]$s) { $script:log.Add($s); Write-Output $s }
 
@@ -47,13 +53,14 @@ try {
         $s.Activate()
         return $s
     }
-    function RunMacro($c1, $c2, $c3, $c4) {
-        return [string]$script:excel.Run('Cleaning_Test.RunTest', [bool]$c1, [bool]$c2, [bool]$c3, [bool]$c4)
+    function RunMacro($c1, $c2, $c3, $c4, $c5 = $false) {
+        return [string]$script:excel.Run('Cleaning_Test.RunTest', [bool]$c1, [bool]$c2, [bool]$c3, [bool]$c4, [bool]$c5)
     }
 
     # ---------------- matrix: cases x option sets ----------------
     $rows = New-Object System.Collections.Generic.List[string]
     $rows.Add('opt,id,actual')
+    $reports = New-Object System.Collections.Generic.List[string]
     foreach ($o in $opts) {
         $ws = Fresh ("M_" + $o.opt)
         $r = 2
@@ -66,8 +73,11 @@ try {
         }
         $last = $r - 1
         $ws.Range("B2:B$last").Select() | Out-Null
-        $msg = RunMacro ($o.c1 -eq '1') ($o.c2 -eq '1') ($o.c3 -eq '1') ($o.c4 -eq '1')
+        $msg = RunMacro ($o.c1 -eq '1') ($o.c2 -eq '1') ($o.c3 -eq '1') ($o.c4 -eq '1') ($o.c5 -eq '1')
         Log ("[{0}] stats: {1}" -f $o.opt, ($msg -replace "`r`n", ' | '))
+        $reports.Add(("{0}`t{1}" -f $o.opt, ($msg -replace "[`r`n]+", ' | ')))
+        # invariant: nothing outside the selection changed - column A holds the ids
+        $r = 2; foreach ($c in $cases) { if ([string]$ws.Range("A$r").Value2 -ne $c.id) { $script:failed++; Log ("[{0}] INVARIANT BROKEN: A{1} changed" -f $o.opt, $r) }; $r++ }
         $r = 2
         foreach ($c in $cases) {
             $v = $ws.Range("B$r").Value2
@@ -76,11 +86,13 @@ try {
         }
     }
     [IO.File]::WriteAllText((Join-Path $AuditDir 'results.csv'), ($rows -join "`r`n") + "`r`n", $utf8)
+    [IO.File]::WriteAllText((Join-Path $AuditDir 'reports.tsv'), ($reports -join "`r`n") + "`r`n", $utf8)
 
     # ---------------- special cases ----------------
+    function Expect([bool]$cond, [string]$what) { if (-not $cond) { throw ('ASSERT FAILED: ' + $what) } }
     function Probe([string]$name, [scriptblock]$body) {
         try { $out = & $body; Log ("{0}: OK {1}" -f $name, $out) }
-        catch { Log ("{0}: EXCEPTION {1}" -f $name, ($_.Exception.Message -replace "\s+", ' ')) }
+        catch { $script:failed++; Log ("{0}: EXCEPTION {1}" -f $name, ($_.Exception.Message -replace "\s+", ' ')) }
         Log ("{0}: Application.ScreenUpdating after = {1}" -f $name, $script:excel.ScreenUpdating)
         $script:excel.ScreenUpdating = $true
     }
@@ -176,14 +188,48 @@ try {
         RunMacro $true $false $false $false
     }
 
-    Probe 'T_rich_text' {
+    Probe 'T_rich_text_cleaned_format_kept' {
         $ws = Fresh 'T_rich'
-        $ws.Range('B2').NumberFormat = '@'; $ws.Range('B2').Value2 = ($cyrR + $cyrA + $cyrB + $cyrO + $cyrT + $cyrA)
+        $ws.Range('B2').NumberFormat = '@'; $ws.Range('B2').Value2 = ('AB1' + $cyrR + '  X')   # homoglyph + double space
         $ws.Range('B2').Characters(1, 1).Font.Bold = $true
-        $b1 = $ws.Range('B2').Characters(1, 1).Font.Bold; $b2 = $ws.Range('B2').Characters(2, 1).Font.Bold
+        $ws.Range('B2').Characters(4, 1).Font.Italic = $true    # the Cyrillic char itself is italic
         $ws.Range('B2').Select() | Out-Null
+        $msg = RunMacro $true $false $false $true
+        'value=[' + $ws.Range('B2').Value2 + '] type=' + $ws.Range('B2').Value2.GetType().Name + ' bold(1)=' + $ws.Range('B2').Characters(1, 1).Font.Bold + ' bold(2)=' + $ws.Range('B2').Characters(2, 1).Font.Bold + ' italic(4)=' + $ws.Range('B2').Characters(4, 1).Font.Italic + ' ; ' + ($msg -replace "`r`n", ' | ')
+    }
+
+    Probe 'T_rich_numberlike_stays_text' {
+        $ws = Fresh 'T_richnum'
+        $ws.Range('B2').NumberFormat = '@'; $ws.Range('B2').Value2 = '00123 '
+        $ws.Range('B2').NumberFormatLocal = $fmtGeneral
+        $ws.Range('B2').Characters(1, 1).Font.Bold = $true
+        $ws.Range('B2').Select() | Out-Null
+        $msg = RunMacro $false $false $false $true
+        'value=[' + $ws.Range('B2').Value2 + '] type=' + $ws.Range('B2').Value2.GetType().Name + ' bold(1)=' + $ws.Range('B2').Characters(1, 1).Font.Bold
+    }
+
+    Probe 'T_explicit_font_color_cleaned' {
+        $ws = Fresh 'T_color'
+        $ws.Range('B2').NumberFormat = '@'; $ws.Range('B2').Value2 = ('AB1' + $cyrR)
+        $ws.Range('B2').Font.ColorIndex = 3
+        $ws.Range('B3').NumberFormat = '@'; $ws.Range('B3').Value2 = ('AB1' + $cyrR)
+        $ws.Range('B3').Font.Color = 255
+        $ws.Range('B2:B3').Select() | Out-Null
         $msg = RunMacro $true $false $false $false
-        'bold(1) before=' + $b1 + ' after=' + $ws.Range('B2').Characters(1, 1).Font.Bold + ' ; bold(2) before=' + $b2 + ' after=' + $ws.Range('B2').Characters(2, 1).Font.Bold + ' ; value=[' + $ws.Range('B2').Value2 + ']'
+        'B2=[' + $ws.Range('B2').Value2 + '] B3=[' + $ws.Range('B3').Value2 + '] colorIndex(B2)=' + $ws.Range('B2').Font.ColorIndex
+    }
+
+    Probe 'T_table_and_conditional_format' {
+        $ws = Fresh 'T_tbl'
+        $ws.Range('B1').Value2 = 'H'
+        foreach ($a in 'B2','B3') { $ws.Range($a).NumberFormat = '@'; $ws.Range($a).Value2 = ('AB1' + $cyrR) }
+        $lo = $ws.ListObjects.Add(1, $ws.Range('B1:B3'), [Type]::Missing, 1)
+        $lo.TableStyle = 'TableStyleMedium2'
+        $fc = $ws.Range('B3').FormatConditions.Add(2, [Type]::Missing, '=TRUE')   # xlExpression
+        $fc.Font.Bold = $true
+        $ws.Range('B2:B3').Select() | Out-Null
+        $msg = RunMacro $true $false $false $false
+        'B2=[' + $ws.Range('B2').Value2 + '] B3=[' + $ws.Range('B3').Value2 + ']'
     }
 
     Probe 'T_formula_injection_from_text' {
@@ -237,13 +283,248 @@ try {
         'B2=[' + $ws.Range('B2').Value2 + '] D5=[' + $ws.Range('D5').Value2 + '] ' + ($msg -replace "`r`n", ' | ')
     }
 
-    Probe 'T_hidden_row' {
+    Probe 'T_hidden_row_processed' {
         $ws = Fresh 'T_hidden'
         foreach ($a in 'B2','B3','B4') { $ws.Range($a).NumberFormat = '@'; $ws.Range($a).Value2 = ('AB1' + $cyrR) }
         $ws.Rows(3).Hidden = $true
         $ws.Range('B2:B4').Select() | Out-Null
         $msg = RunMacro $true $false $false $false
         'B2=[' + $ws.Range('B2').Value2 + '] B3(hidden)=[' + $ws.Range('B3').Value2 + '] B4=[' + $ws.Range('B4').Value2 + '] ' + ($msg -replace "`r`n", ' | ')
+    }
+
+    Probe 'T_cyrillic_left_is_listed_and_selected' {
+        $ws = Fresh 'T_left'
+        $ws.Range('B2').NumberFormat = '@'; $ws.Range('B2').Value2 = ('AB1' + $cyrR)          # code: fixed
+        $ws.Range('B3').NumberFormat = '@'; $ws.Range('B3').Value2 = ($cyrB + $cyrO + $cyrT)  # Russian word: left, must be named
+        $ws.Range('B5').NumberFormat = '@'; $ws.Range('B5').Value2 = ($cyrT + $cyrO + '-A')   # Russian word + Latin, no digit: left
+        $ws.Range('B2:B5').Select() | Out-Null
+        $msg = RunMacro $true $false $false $false
+        'B2=[' + $ws.Range('B2').Value2 + '] B3=[' + $ws.Range('B3').Value2 + '] B5=[' + $ws.Range('B5').Value2 + '] ' + ($msg -replace "`r`n", ' | ')
+    }
+
+    Probe 'T_only_codes_override' {
+        $ws = Fresh 'T_override'
+        $ws.Range('B2').NumberFormat = '@'; $ws.Range('B2').Value2 = ($cyrB + $cyrO + $cyrT)     # all homoglyphs, no digit: converted under override
+        $ws.Range('B3').NumberFormat = '@'; $ws.Range('B3').Value2 = ($cyrT + $cyrO + [string][char]0x0416)  # contains U+0416 (no Latin pair): listed
+        $ws.Range('B2:B3').Select() | Out-Null
+        $msg = RunMacro $true $false $false $false $true
+        'B2=[' + $ws.Range('B2').Value2 + '] B3=[' + $ws.Range('B3').Value2 + '] ' + ($msg -replace "`r`n", ' | ')
+    }
+
+    Probe 'T_merged_area_partially_selected' {
+        # B2:C2 merged, only column B selected. Excel itself expands a Select to the whole merged
+        # area (the report says 4 cells), so the anchor IS processed; the partial-merge guard only
+        # fires for VBA-built ranges. Kept as documentation of that behaviour.
+        $ws = Fresh 'T_mergepart'
+        $ws.Range('B2:C2').Merge()
+        $ws.Range('B2').NumberFormat = '@'; $ws.Range('B2').Value2 = ('AB1' + $cyrR)
+        $ws.Range('B3').NumberFormat = '@'; $ws.Range('B3').Value2 = ('AB1' + $cyrR)
+        $ws.Range('B2:B3').Select() | Out-Null
+        $msg = RunMacro $true $false $false $false
+        'B2(merged,partial)=[' + $ws.Range('B2').Value2 + '] B3=[' + $ws.Range('B3').Value2 + '] ' + ($msg -replace "`r`n", ' | ')
+    }
+
+    Probe 'T_merged_area_fully_selected' {
+        $ws = Fresh 'T_mergefull'
+        $ws.Range('B2:C2').Merge()
+        $ws.Range('B2').NumberFormat = '@'; $ws.Range('B2').Value2 = ('AB1' + $cyrR)
+        $ws.Range('B2:C2').Select() | Out-Null
+        $msg = RunMacro $true $false $false $false
+        'B2(merged,full)=[' + $ws.Range('B2').Value2 + '] mergeKept=' + $ws.Range('B2').MergeCells
+    }
+
+    Probe 'T_rich_backup_book_is_closed' {
+        # a rich cell forces the scratch backup workbook; after the run it must be gone
+        $ws = Fresh 'T_backup'
+        $ws.Range('B2').NumberFormat = '@'; $ws.Range('B2').Value2 = ('AB1' + $cyrR)
+        $ws.Range('B2').Characters(1, 1).Font.Bold = $true
+        $before = $script:excel.Workbooks.Count
+        $ws.Range('B2').Select() | Out-Null
+        $msg = RunMacro $true $false $false $false
+        Expect ([string]$ws.Range('B2').Value2 -eq 'AB1P') 'the rich cell was cleaned'
+        Expect ($script:excel.Workbooks.Count -eq $before) 'the scratch backup workbook was closed'
+        Expect ($script:excel.ActiveWorkbook.Name -eq $script:wb.Name) 'the user workbook is active again'
+        'B2=[' + $ws.Range('B2').Value2 + '] workbooks before=' + $before + ' after=' + $script:excel.Workbooks.Count + ' activeIsOurs=' + ($script:excel.ActiveWorkbook.Name -eq $script:wb.Name)
+    }
+
+    Probe 'T_table_header_is_exception' {
+        # a Cyrillic homoglyph in an Excel Table HEADER must not be written (Excel renames duplicates,
+        # rewrites structured references) - it is named in the report and selected; body cells are cleaned
+        $ws = Fresh 'T_hdr'
+        $ws.Range('B1').NumberFormat = '@'; $ws.Range('B1').Value2 = ('AB1' + $cyrR)
+        $ws.Range('B2').NumberFormat = '@'; $ws.Range('B2').Value2 = ('AB1' + $cyrR)
+        $lo = $ws.ListObjects.Add(1, $ws.Range('B1:B2'), [Type]::Missing, 1)
+        $ws.Range('B1:B2').Select() | Out-Null
+        $msg = RunMacro $true $false $false $false
+        'B1(header)=[' + $ws.Range('B1').Value2 + '] B2(body)=[' + $ws.Range('B2').Value2 + '] ' + ($msg -replace "`r`n", ' | ')
+    }
+
+    Probe 'T_rich_crlf_keeps_original_space_format' {
+        # X<CR><LF><SPACE>Y with an underlined space, action 2 only -> "X  Y". Excel numbers characters
+        # differently when SETTING font properties (raw string) and when reading/editing (CRLF = one
+        # char), so the fixture is verified by dumping the underline of EVERY character before and
+        # after: the character that carried the underline must still carry it, and be a space.
+        $ws = Fresh 'T_crlf'
+        $c = $ws.Range('B2'); $c.NumberFormat = '@'; $c.Value2 = ("X`r`n Y")
+        $c.Characters(4, 1).Font.Underline = 2      # raw index 4 = the real space
+        $before = Runs $c 'Underline'
+        $ws.Range('B2').Select() | Out-Null
+        $msg = RunMacro $false $true $false $false
+        Expect ([string]$c.Value2 -eq 'X  Y') 'CRLF became one space, the original space kept'
+        Expect ($c.Characters(3, 1).Font.Underline -eq 2) 'the underline is still on a space'
+        Expect ([string]$c.Characters(3, 1).Text -eq ' ') 'the underlined character is a space'
+        'before: ' + $before + ' ; after: ' + (Runs $c 'Underline') + ' (2 = underlined; the underlined char must be a space before and after) ; ' + ($msg -replace "`r`n", ' | ')
+    }
+
+    Probe 'T_rich_format_on_letter_after_crlf' {
+        $ws = Fresh 'T_crlf2'
+        $c = $ws.Range('B2'); $c.NumberFormat = '@'; $c.Value2 = ("X`r`n Y")
+        $c.Characters(5, 1).Font.Bold = $true       # raw index 5 = Y
+        $before = Runs $c 'Bold'
+        $ws.Range('B2').Select() | Out-Null
+        $msg = RunMacro $false $true $false $false
+        Expect ($c.Characters(4, 1).Font.Bold -eq $true) 'Y still bold'
+        Expect ($c.Characters(1, 1).Font.Bold -eq $false) 'X still not bold'
+        'before: ' + $before + ' ; after: ' + (Runs $c 'Bold') + ' (Y must be bold before and after, nothing else) ; ' + ($msg -replace "`r`n", ' | ')
+    }
+
+    Probe 'T_rich_255_edited_in_place_256_flattened' {
+        # measured limit: Characters edits are silent no-ops above 255 chars -> the macro must edit
+        # 255 in place and write 256 whole. A whole write does NOT drop the runs (measured): Excel
+        # keeps them BY INDEX, so the cell is NAMED in the report as possibly shifted, not as reset.
+        $ws = Fresh 'T_r255'
+        $a = $ws.Range('B2'); $a.NumberFormat = '@'; $a.Value2 = ('1' + ('x' * 253) + $cyrR); $a.Characters(1, 1).Font.Bold = $true
+        $b = $ws.Range('B3'); $b.NumberFormat = '@'; $b.Value2 = ('1' + ('x' * 254) + $cyrR); $b.Characters(1, 1).Font.Bold = $true
+        $ws.Range('B2:B3').Select() | Out-Null
+        $msg = RunMacro $true $false $false $false
+        Expect ([string]$a.Value2.Substring(254) -eq 'P') '255 chars: the homoglyph was replaced'
+        Expect ($a.Characters(1, 1).Font.Bold -eq $true) '255 chars: edited in place, formatting kept'
+        Expect ([string]$b.Value2.Substring(255) -eq 'P') '256 chars: the homoglyph was replaced'
+        # measured (DIAG 2026-09-22): a whole Value2 write does NOT clear the runs - they stay by
+        # index. So the report must NOT claim "formatting reset"; it must name the cell and warn
+        # that the formatting may now sit on other characters.
+        Expect ($b.Characters(1, 1).Font.Bold -eq $true) '256 chars: Excel keeps the runs by index'
+        Expect ($msg -match 'B3') '256 chars: the cell written whole is NAMED in the report'
+        'B2(255): last=[' + $a.Value2.Substring(254) + '] bold(1)=' + $a.Characters(1, 1).Font.Bold + ' ; B3(256): last=[' + $b.Value2.Substring(255) + '] bold(1)=' + $b.Characters(1, 1).Font.Bold + ' ; ' + ($msg -replace "`r`n", ' | ')
+    }
+
+    Probe 'T_hyperlink_cell' {
+        $ws = Fresh 'T_link'
+        $c = $ws.Range('B2'); $c.NumberFormat = '@'; $c.Value2 = ('AB1' + $cyrR + '  X')
+        $null = $ws.Hyperlinks.Add($c, 'https://example.com/', '', 'tip', $c.Value2)
+        $ws.Range('B2').Select() | Out-Null
+        $msg = RunMacro $true $false $false $true
+        'value=[' + $c.Value2 + '] links=' + $c.Hyperlinks.Count + ' address=[' + $(if ($c.Hyperlinks.Count -gt 0) { $c.Hyperlinks.Item(1).Address } else { '-' }) + ']'
+    }
+
+    Probe 'T_prefix_apostrophe_cell' {
+        $ws = Fresh 'T_apos'
+        $c = $ws.Range('B2'); $c.Formula = "'AB1" + $cyrR + "  X"    # typed with a leading apostrophe
+        $ws.Range('B2').Select() | Out-Null
+        $msg = RunMacro $true $false $false $true
+        'value=[' + $c.Value2 + '] type=' + $c.Value2.GetType().Name + ' prefix=[' + $c.PrefixCharacter + ']'
+    }
+
+    Probe 'T_rich_32767_written_whole_and_reported' {
+        # above the 255-char Characters limit the rich cell is written whole: value right, formatting kept by index, possibly shifted,
+        # and the report must NAME it as flattened
+        $ws = Fresh 'T_rich32k'
+        $c = $ws.Range('B2'); $c.NumberFormat = '@'; $c.Value2 = (' 1' + ('x' * 32764) + $cyrR)
+        $c.Characters(2, 1).Font.Bold = $true
+        $ws.Range('B2').Select() | Out-Null
+        $msg = RunMacro $true $false $false $true
+        $v = $c.Value2
+        'len=' + $v.Length + ' first=[' + $v.Substring(0,1) + '] last=[' + $v.Substring($v.Length-1,1) + '] type=' + $v.GetType().Name + ' ; ' + ($msg -replace "`r`n", ' | ')
+    }
+
+    Probe 'T_rich_formula_looking_text' {
+        $ws = Fresh 'T_richf'
+        $c = $ws.Range('B2'); $c.NumberFormat = '@'; $c.Value2 = '=1 +  1'; $c.NumberFormatLocal = $fmtGeneral
+        $c.Characters(1, 1).Font.Bold = $true
+        $ws.Range('B2').Select() | Out-Null
+        $msg = RunMacro $false $false $false $true
+        'value=[' + $c.Value2 + '] formula=' + $c.HasFormula + ' type=' + $c.Value2.GetType().Name + ' bold(1)=' + $c.Characters(1, 1).Font.Bold
+    }
+
+    Probe 'T_events_restored_after_run' {
+        $ws = Fresh 'T_state'
+        $ws.Range('B2').NumberFormat = '@'; $ws.Range('B2').Value2 = ('AB1' + $cyrR)
+        $script:excel.EnableEvents = $true; $script:excel.Calculation = -4105   # xlCalculationAutomatic
+        $ws.Range('B2').Select() | Out-Null
+        $msg = RunMacro $true $false $false $false
+        Expect ($script:excel.EnableEvents -eq $true) 'EnableEvents restored'
+        Expect ([int]$script:excel.Calculation -eq -4105) 'Calculation restored'
+        Expect ($script:excel.ScreenUpdating -eq $true) 'ScreenUpdating restored'
+        Expect ([int]$script:excel.EnableCancelKey -eq 1) 'EnableCancelKey back to xlInterrupt'
+        Expect ($script:excel.StatusBar -eq $false) 'the status bar was given back to Excel'
+        Expect ($msg -cnotmatch 'EXCEL') 'a clean run carries no state warning'
+        'EnableEvents=' + $script:excel.EnableEvents + ' Calculation=' + $script:excel.Calculation + ' (expect True, -4105) StatusBar=[' + $script:excel.StatusBar + '] CancelKey=' + $script:excel.EnableCancelKey
+    }
+
+    Probe 'T_cells_of_spaces_become_empty_no_rollback' {
+        # General cells holding only spaces / TAB / NBSP clean to EMPTY; that must not be treated as a
+        # failed write (which would roll back the neighbour too) - Codex round 3, finding A
+        $ws = Fresh 'T_empty'
+        $ws.Range('B2').NumberFormat = '@'; $ws.Range('B2').Value2 = ('AB1' + $cyrR)
+        foreach ($pair in @(@('B3', '   '), @('B4', "`t"), @('B5', [string][char]0xA0))) {
+            $c = $ws.Range($pair[0]); $c.NumberFormat = '@'; $c.Value2 = $pair[1]; $c.NumberFormatLocal = $fmtGeneral
+        }
+        $ws.Range('B2:B5').Select() | Out-Null
+        $msg = RunMacro $true $true $false $true
+        Expect ([string]$ws.Range('B2').Value2 -eq 'AB1P') 'the neighbour was cleaned - no rollback'
+        foreach ($a in @('B3', 'B4', 'B5')) { Expect ([string]$ws.Range($a).Value2 -eq '') ($a + ' cleaned to empty') }
+        'B2=[' + $ws.Range('B2').Value2 + '] B3=[' + $ws.Range('B3').Value2 + '] B4=[' + $ws.Range('B4').Value2 + '] B5=[' + $ws.Range('B5').Value2 + '] (expect AB1P and three empty) ; ' + ($msg -replace "`r`n", ' | ')
+    }
+
+    Probe 'T_rich_tab_kept_when_only_action1' {
+        # AB1<Cyr R><TAB>X with bold A, action 1 only: the TAB must stay and the bold A must stay
+        # (Codex round 3, finding B)
+        $ws = Fresh 'T_richtab'
+        $c = $ws.Range('B2'); $c.NumberFormat = '@'; $c.Value2 = ('AB1' + $cyrR + "`tX"); $c.Characters(1, 1).Font.Bold = $true
+        $ws.Range('B2').Select() | Out-Null
+        $msg = RunMacro $true $false $false $false
+        Expect ([string]$c.Value2 -eq ('AB1P' + "`tX")) 'TAB kept, homoglyph replaced'
+        Expect ($c.Characters(1, 1).Font.Bold -eq $true) 'bold A kept'
+        Expect ($c.Characters(5, 1).Font.Bold -eq $false) 'the TAB did not inherit bold'
+        'before-shape: AB1R<TAB>X ; after: ' + (Runs $c 'Bold') + ' (expect A bold, TAB present, R->P) ; ' + ($msg -replace "`r`n", ' | ')
+    }
+
+    Probe 'T_rich_lf_kept_when_only_action1' {
+        $ws = Fresh 'T_richlf'
+        $c = $ws.Range('B2'); $c.NumberFormat = '@'; $c.Value2 = ('AB1' + $cyrR + "`nX"); $c.Characters(6, 1).Font.Bold = $true
+        $ws.Range('B2').Select() | Out-Null
+        $msg = RunMacro $true $false $false $false
+        Expect ([string]$c.Value2 -eq ('AB1P' + "`nX")) 'LF kept, homoglyph replaced'
+        Expect ($c.Characters(6, 1).Font.Bold -eq $true) 'bold X kept'
+        'after: ' + (Runs $c 'Bold') + ' (expect LF present, X bold, R->P) ; ' + ($msg -replace "`r`n", ' | ')
+    }
+
+    Probe 'T_rich_crlf_kept_when_only_action1' {
+        # AB1<Cyr R><CR><LF>X with bold X, action 1 only: the line break must stay and X must stay bold.
+        # Excel itself drops the CR on ANY Characters edit (measured), so the cell reads AB1P<LF>X and
+        # the report must SAY so instead of flattening the cell to keep the CR (Codex round 4)
+        $ws = Fresh 'T_richcrlf'
+        $c = $ws.Range('B2'); $c.NumberFormat = '@'; $c.Value2 = ('AB1' + $cyrR + "`r`nX"); $c.Characters(7, 1).Font.Bold = $true
+        $before = Runs $c 'Bold'
+        $ws.Range('B2').Select() | Out-Null
+        $msg = RunMacro $true $false $false $false
+        Expect ([string]$c.Value2 -eq ('AB1P' + "`nX")) 'CR dropped by Excel, LF and text kept'
+        Expect ($c.Characters(6, 1).Font.Bold -eq $true) 'bold X kept - the cell was NOT written whole'
+        Expect ($msg -match 'CRLF') 'the report names the CRLF -> LF conversion'
+        'before: ' + $before + ' ; after: value=[' + (Esc ([string]$c.Value2)) + '] ' + (Runs $c 'Bold') + ' (expect AB1P{LF}X, only X bold, report names the CRLF->LF) ; ' + ($msg -replace "`r`n", ' | ')
+    }
+
+    Probe 'T_rich_two_tabs_before_underlined_space_collapse' {
+        # A<TAB><TAB><SPACE>B with the SPACE underlined, action 4 (collapse): "A B", and the surviving
+        # space must be the ORIGINAL underlined one, not the first TAB substituted (Codex round 4)
+        $ws = Fresh 'T_twotabs'
+        $c = $ws.Range('B2'); $c.NumberFormat = '@'; $c.Value2 = ("A`t`t B"); $c.Characters(4, 1).Font.Underline = 2
+        $before = Runs $c 'Underline'
+        $ws.Range('B2').Select() | Out-Null
+        $msg = RunMacro $false $false $false $true
+        Expect ([string]$c.Value2 -eq 'A B') 'two TABs and a space collapsed to one space'
+        Expect ($c.Characters(2, 1).Font.Underline -eq 2) 'the surviving space is the ORIGINAL underlined one'
+        'before: ' + $before + ' ; after: value=[' + (Esc ([string]$c.Value2)) + '] ' + (Runs $c 'Underline') + ' (expect A B with the space underlined = 2) ; ' + ($msg -replace "`r`n", ' | ')
     }
 
     Probe 'T_whole_column_timing' {
@@ -255,6 +536,143 @@ try {
         $sw.Stop()
         ('{0:N1} s for 1,048,576 cells (20 with data); stats: {1}' -f $sw.Elapsed.TotalSeconds, ($msg -replace "`r`n", ' | '))
     }
+    # ---------------- rollback, for real: a fresh workbook, PutText injected to fail at B5 ----------------
+    Probe 'T_rollback_after_injected_write_failure' {
+        $script:wb.Close($false)
+        $script:wb = $script:excel.Workbooks.Add()
+        [void]$script:wb.VBProject.VBComponents.Import((Join-Path $AuditDir 'Cleaning_TestFail.bas'))
+        [void]$script:wb.VBProject.VBComponents.Import((Join-Path $FormDir  'CleaningForm.frm'))
+        $ws = Fresh 'T_rollback'
+        # B2: rich (bold A) with a homoglyph -> edited in place first
+        $ws.Range('B2').NumberFormat = '@'; $ws.Range('B2').Value2 = ('AB1' + $cyrR); $ws.Range('B2').Characters(1, 1).Font.Bold = $true
+        # B3:B4 vertical merge, rich (bold E), with a homoglyph -> edited in place SECOND, so the rollback
+        # has to bring an already-modified merged area back from the backup copy (Codex round 4)
+        $ws.Range('B3:B4').Merge(); $ws.Range('B3').NumberFormat = '@'; $ws.Range('B3').Value2 = ('EF3' + $cyrR); $ws.Range('B3').Characters(1, 1).Font.Bold = $true
+        # B5: plain, injected to FAIL on write
+        $ws.Range('B5').NumberFormat = '@'; $ws.Range('B5').Value2 = ('CD2' + $cyrR)
+        # B6: plain, planned after B5, never reached
+        $ws.Range('B6').NumberFormat = '@'; $ws.Range('B6').Value2 = ('GH4' + $cyrR)
+        $script:excel.EnableEvents = $true; $script:excel.Calculation = -4105
+        $books = $script:excel.Workbooks.Count
+        $ws.Range('B2:B6').Select() | Out-Null
+        $msg = RunMacro $true $false $false $false
+        Expect ([string]$ws.Range('B2').Value2 -eq ('AB1' + $cyrR)) 'B2 rolled back to the original text'
+        Expect ($ws.Range('B2').Characters(1, 1).Font.Bold -eq $true) 'B2 bold A restored'
+        Expect ($ws.Range('B2').Characters(2, 1).Font.Bold -eq $false) 'B2 non-bold B restored'
+        Expect ([string]$ws.Range('B3').Value2 -eq ('EF3' + $cyrR)) 'the modified MERGED rich area rolled back'
+        Expect ($ws.Range('B3').MergeCells -eq $true) 'the merge survived the rollback'
+        Expect ($ws.Range('B3').Characters(1, 1).Font.Bold -eq $true) 'B3 bold E restored'
+        Expect ([string]$ws.Range('B5').Value2 -eq ('CD2' + $cyrR)) 'the failed cell is untouched'
+        Expect ([string]$ws.Range('B6').Value2 -eq ('GH4' + $cyrR)) 'the never-reached cell is untouched'
+        Expect ($script:excel.Workbooks.Count -eq $books) 'the backup workbook was closed'
+        Expect ($script:excel.EnableEvents -eq $true) 'events restored'
+        'B2=[' + $ws.Range('B2').Value2 + '] bold(1)=' + $ws.Range('B2').Characters(1, 1).Font.Bold + ' bold(2)=' + $ws.Range('B2').Characters(2, 1).Font.Bold + ' ; B3=[' + $ws.Range('B3').Value2 + '] merged=' + $ws.Range('B3').MergeCells + ' bold(1)=' + $ws.Range('B3').Characters(1, 1).Font.Bold + ' bold(2)=' + $ws.Range('B3').Characters(2, 1).Font.Bold + ' ; B5=[' + $ws.Range('B5').Value2 + '] ; B6=[' + $ws.Range('B6').Value2 + '] (expect all four original, B3 still merged, bold only on A and E) ; workbooks ' + $books + '->' + $script:excel.Workbooks.Count + ' events=' + $script:excel.EnableEvents + ' calc=' + $script:excel.Calculation + ' ; ' + ($msg -replace "`r`n", ' | ')
+    }
+
+    # ---------------- the region AFTER the last write: an error there must NOT roll back, but must clean up ----------------
+    Probe 'T_postwrite_failure_keeps_cleaned_cells' {
+        $script:wb.Close($false)
+        $script:wb = $script:excel.Workbooks.Add()
+        [void]$script:wb.VBProject.VBComponents.Import((Join-Path $AuditDir 'Cleaning_TestPostFail.bas'))
+        [void]$script:wb.VBProject.VBComponents.Import((Join-Path $FormDir  'CleaningForm.frm'))
+        $ws = Fresh 'T_postwrite'
+        $ws.Range('B2').NumberFormat = '@'; $ws.Range('B2').Value2 = ('AB1' + $cyrR); $ws.Range('B2').Characters(1, 1).Font.Bold = $true
+        $ws.Range('B3').NumberFormat = '@'; $ws.Range('B3').Value2 = ('CD2' + $cyrR)
+        $script:excel.EnableEvents = $true; $script:excel.Calculation = -4105
+        $books = $script:excel.Workbooks.Count
+        $ws.Range('B2:B3').Select() | Out-Null
+        $msg = RunMacro $true $false $false $false
+        Expect ([string]$ws.Range('B2').Value2 -eq 'AB1P') 'B2 stays CLEANED - nothing to roll back after the writes'
+        Expect ([string]$ws.Range('B3').Value2 -eq 'CD2P') 'B3 stays cleaned'
+        Expect ($ws.Range('B2').Characters(1, 1).Font.Bold -eq $true) 'B2 formatting kept'
+        Expect ($script:excel.Workbooks.Count -eq $books) 'the backup workbook was closed anyway'
+        Expect ($script:excel.EnableEvents -eq $true) 'events restored'
+        Expect ([int]$script:excel.Calculation -eq -4105) 'calculation restored'
+        Expect ($msg -match 'injected') 'the report names the post-write error instead of hiding it'
+        'B2=[' + $ws.Range('B2').Value2 + '] B3=[' + $ws.Range('B3').Value2 + '] bold(1)=' + $ws.Range('B2').Characters(1, 1).Font.Bold + ' ; workbooks ' + $books + '->' + $script:excel.Workbooks.Count + ' events=' + $script:excel.EnableEvents + ' calc=' + $script:excel.Calculation + ' ; ' + ($msg -replace "`r`n", ' | ')
+    }
+
+    # ---------------- an Application property that refuses to come back must be REPORTED ----------------
+    Probe 'T_application_restore_failure_is_reported' {
+        $script:wb.Close($false)
+        $script:wb = $script:excel.Workbooks.Add()
+        [void]$script:wb.VBProject.VBComponents.Import((Join-Path $AuditDir 'Cleaning_TestRestoreFail.bas'))
+        [void]$script:wb.VBProject.VBComponents.Import((Join-Path $FormDir  'CleaningForm.frm'))
+        $ws = Fresh 'T_restfail'
+        $ws.Range('B2').NumberFormat = '@'; $ws.Range('B2').Value2 = ('AB1' + $cyrR)
+        $script:excel.EnableEvents = $true
+        $ws.Range('B2').Select() | Out-Null
+        $msg = RunMacro $true $false $false $false
+        Expect ([string]$ws.Range('B2').Value2 -eq 'AB1P') 'the cell was still cleaned'
+        Expect ($msg -cmatch 'EXCEL') 'the report NAMES the state that could not be restored'
+        $script:excel.EnableEvents = $true      # the injected copy left it as the macro set it
+        'B2=[' + $ws.Range('B2').Value2 + '] ; ' + ($msg -replace "`r`n", ' | ')
+    }
+
+    # ---------------- when even the mandatory block overflows, the alarm gets its OWN window --------
+    Probe 'T_alarm_shown_separately_when_report_overflows' {
+        $script:wb.Close($false)
+        $script:wb = $script:excel.Workbooks.Add()
+        [void]$script:wb.VBProject.VBComponents.Import((Join-Path $AuditDir 'Cleaning_TestPostFail.bas'))
+        [void]$script:wb.VBProject.VBComponents.Import((Join-Path $FormDir  'CleaningForm.frm'))
+        $ws = Fresh 'T_overflow'
+        $ws.Range('B1').Value2 = ('H' + $cyrR)                                   # table header -> exception
+        foreach ($a in 'B2','B3') { $ws.Range($a).NumberFormat = '@'; $ws.Range($a).Value2 = ('AB1' + $cyrR) }
+        [void]$ws.ListObjects.Add(1, $ws.Range('B1:B3'), [Type]::Missing, 1)
+        $d = $ws.Range('D2'); $d.NumberFormat = '@'; $d.Value2 = ('1' + ('x' * 254) + $cyrR)
+        $d.Characters(1, 1).Font.Bold = $true                                    # 256 chars -> written whole
+        $e = $ws.Range('D3'); $e.NumberFormat = '@'; $e.Value2 = ('AB1' + $cyrR + "`r`nX")
+        $e.Characters(7, 1).Font.Bold = $true                                    # rich CRLF -> CRLF notice
+        foreach ($i in 4..16) { $c = $ws.Range('D' + $i); $c.NumberFormat = '@'; $c.Value2 = ($cyrA + $cyrB + $cyrO + $cyrT) }
+        $ws.Rows('10:10').Hidden = $true                                         # hidden text -> head grows
+        $ws.Range('F2:G2').Merge(); $ws.Range('F2').NumberFormat = '@'; $ws.Range('F2').Value2 = ('AB1' + $cyrR)
+        $ws.Range('B1:F16').Select() | Out-Null                                  # cuts the merge -> exception
+        $msg = RunMacro $true $false $false $true
+        Expect ($msg -match 'NEXT MSGBOX') 'the alarm block was shown in its own window first'
+        $first = ($msg -split '\|NEXT MSGBOX\|')[0]
+        $second = ($msg -split '\|NEXT MSGBOX\|')[1]
+        Expect ($first -match 'injected') 'that first window carries the post-write error'
+        Expect ($first.Length -lt 600) 'the separate alarm window is short enough to be read whole'
+        Expect ($second.Length -gt 1000) 'the full report really did overflow the budget'
+        'len(alarm window)=' + $first.Length + ' len(report)=' + $second.Length + ' ; ' + ($msg -replace "`r`n", ' | ')
+    }
+
+    # ---------------- every alarm at once, and the error description is 1200 chars long ----------------
+    Probe 'T_all_alarms_fit_the_separate_window' {
+        # Codex round 6: the separate window took the WHOLE alarm text, so a long Err.Description
+        # would push the backup and Excel-state warnings out of what MsgBox shows.
+        $script:wb.Close($false)
+        $script:wb = $script:excel.Workbooks.Add()
+        [void]$script:wb.VBProject.VBComponents.Import((Join-Path $AuditDir 'Cleaning_TestAllFail.bas'))
+        [void]$script:wb.VBProject.VBComponents.Import((Join-Path $FormDir  'CleaningForm.frm'))
+        $ws = Fresh 'T_allalarm'
+        # a rich cell forces the scratch backup workbook, whose close is injected to fail
+        $ws.Range('B2').NumberFormat = '@'; $ws.Range('B2').Value2 = ('AB1' + $cyrR)
+        $ws.Range('B2').Characters(1, 1).Font.Bold = $true
+        $script:excel.EnableEvents = $true
+        $books = $script:excel.Workbooks.Count
+        $ws.Range('B2').Select() | Out-Null
+        $msg = RunMacro $true $false $false $false
+        $first = ($msg -split '\|NEXT MSGBOX\|')[0]
+        # Cyrillic needles by code point, so this file stays pure ASCII
+        $manually = -join ([char]0x0432,[char]0x0440,[char]0x0443,[char]0x0447,[char]0x043D,[char]0x0443,[char]0x044E)
+        # What must hold is not "a second window appeared" but "every alarm is inside what MsgBox
+        # actually shows". With each part clipped, a 1200-char error description can no longer push
+        # the other two warnings out - here all three sit in the first 1000 characters.
+        $iErr  = $first.IndexOf('injected')
+        $iBak  = $first.IndexOf($manually)
+        $iState = $first.IndexOf('EXCEL', [StringComparison]::Ordinal)
+        Expect ($iErr -ge 0 -and $iErr -lt 1000) 'the post-write error is visible in the window'
+        Expect ($iBak -ge 0 -and $iBak -lt 1000) 'the "close the backup by hand" warning is visible'
+        Expect ($iState -ge 0 -and $iState -lt 1000) 'the unrestored-state warning is visible'
+        Expect ([string]$ws.Range('B2').Value2 -eq 'AB1P') 'and the cell was still cleaned'
+        $script:excel.EnableEvents = $true
+        while ($script:excel.Workbooks.Count -gt $books) {   # the injected backup never closed itself
+            $script:excel.Workbooks.Item($script:excel.Workbooks.Count).Close($false)
+        }
+        'len(alarm window)=' + $first.Length + ' of total ' + $msg.Length + ' ; ' + ($first -replace "`r`n", ' | ')
+    }
+
 }
 finally {
     if ($wb)    { $wb.Close($false) }
@@ -263,3 +681,6 @@ finally {
     [GC]::Collect(); [GC]::WaitForPendingFinalizers()
     [IO.File]::WriteAllText((Join-Path $AuditDir 'special.txt'), ($log -join "`r`n") + "`r`n", $utf8)
 }
+# A bench that prints failures and exits 0 is not a gate. Codex round 5, on the bench itself.
+if ($failed -gt 0) { Write-Output ("PROBES FAILED: {0}" -f $failed); exit 1 }
+Write-Output 'probes: all clean'
