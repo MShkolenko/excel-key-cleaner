@@ -1,0 +1,6 @@
+* text=auto
+*.frx binary
+*.xlsx binary
+*.zip binary
+dist/*.bas -text
+dist/*.frm -text
