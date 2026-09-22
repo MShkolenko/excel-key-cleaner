@@ -1,5 +1,6 @@
 Attribute VB_Name = "Cleaning"
 Option Explicit
+Option Compare Binary   ' омоглифы и Replace зависят от регистра - не давать проекту переопределить
 
 ' Очистка ключей в выделенных ячейках: кириллические омоглифы -> латиница, переносы строк,
 ' пробелы. Работает только с текстовыми константами (формулы, числа, даты, ошибки, пустые и
@@ -31,10 +32,12 @@ Public Sub CleanKeys()
     Dim doCyrillic As Boolean, doLineBreaks As Boolean, doRemoveSpaces As Boolean, doNormalizeSpaces As Boolean
     Dim target As Range, cell As Range
     Dim st As Stats
-    Dim plannedCells As New Collection, plannedOld As New Collection, plannedNew As New Collection, plannedFmt As New Collection
+    Dim plannedCells() As Range, plannedOld() As String, plannedNew() As String, plannedFmt() As Variant
+    Dim plannedCount As Long, plannedCapacity As Long
     Dim s0 As String, s As String
     Dim i As Long, attempted As Long, rolledBack As Long, rollbackFailed As Long
     Dim oldSU As Boolean, oldEE As Boolean, oldCalc As XlCalculation, calcChanged As Boolean
+    Dim oldStatusBar As Variant, statusBarShown As Boolean, total As Double
 
     If TypeName(Selection) <> "Range" Then
         MsgBox "Выделите ячейки для обработки.", vbExclamation
@@ -68,8 +71,12 @@ Public Sub CleanKeys()
     End If
 
     ' ---------- план: что во что превратится, без единой записи ----------
+    total = target.CountLarge
+    oldStatusBar = Application.StatusBar
+    statusBarShown = True
     For Each cell In target
         st.cellsSeen = st.cellsSeen + 1
+        ShowProgress "проверка", st.cellsSeen, total
         If IsRichText(cell) Then
             st.richText = st.richText + 1
         Else
@@ -81,14 +88,17 @@ Public Sub CleanKeys()
             If doNormalizeSpaces Then s = NormalizeSpaces(s, st)
             If s <> s0 Then
                 If cell.Parent.ProtectContents And cell.Locked Then
+                    RestoreStatusBar oldStatusBar, statusBarShown
                     MsgBox "Ячейка " & cell.Address(False, False) & " заблокирована на защищённом листе." & vbCrLf & _
                            "Ничего не изменено.", vbCritical, "Защищённый лист"
                     Exit Sub
                 End If
-                plannedCells.Add cell
-                plannedOld.Add s0
-                plannedNew.Add s
-                plannedFmt.Add cell.NumberFormat
+                If plannedCount = plannedCapacity Then GrowPlanned plannedCells, plannedOld, plannedNew, plannedFmt, plannedCapacity
+                plannedCount = plannedCount + 1
+                Set plannedCells(plannedCount) = cell
+                plannedOld(plannedCount) = s0
+                plannedNew(plannedCount) = s
+                plannedFmt(plannedCount) = cell.NumberFormat
             End If
         End If
     Next cell
@@ -107,13 +117,15 @@ Public Sub CleanKeys()
     Application.Calculation = xlCalculationManual
     calcChanged = True
 
-    For i = 1 To plannedCells.Count
+    For i = 1 To plannedCount
         attempted = i
+        ShowProgress "запись", i, CDbl(plannedCount)
         PutText plannedCells(i), plannedNew(i)
     Next i
     st.cellsChanged = attempted
     On Error GoTo 0
 
+    RestoreStatusBar oldStatusBar, statusBarShown
     RestoreApp oldSU, oldEE, oldCalc, calcChanged
     MsgBox Report(st, doCyrillic, doLineBreaks, doRemoveSpaces, doNormalizeSpaces), vbInformation, "Результат обработки"
     Exit Sub
@@ -129,6 +141,7 @@ Fail:
         RestoreCell plannedCells(i), plannedOld(i), plannedFmt(i)
         If Err.Number = 0 Then rolledBack = rolledBack + 1 Else rollbackFailed = rollbackFailed + 1
     Next i
+    RestoreStatusBar oldStatusBar, statusBarShown
     RestoreApp oldSU, oldEE, oldCalc, calcChanged
     Dim msg As String
     msg = "Ошибка при записи: " & errText & vbCrLf & vbCrLf
@@ -150,6 +163,42 @@ Private Sub RestoreApp(ByVal su As Boolean, ByVal ee As Boolean, ByVal calc As X
     If calcChanged Then Application.Calculation = calc
     Application.EnableEvents = ee
     Application.ScreenUpdating = su
+End Sub
+
+' Показывает ход выполнения в строке состояния - без DoEvents (он открыл бы повторный вход
+' в макрос посреди запланированной операции). Обновляется не на каждой ячейке, чтобы сама
+' запись в StatusBar не стала заметной долей времени.
+Private Sub ShowProgress(ByVal phase As String, ByVal doneCount As Long, ByVal totalCount As Double)
+    If doneCount = 1 Or totalCount = 0 Or doneCount Mod 500 = 0 Or CDbl(doneCount) = totalCount Then
+        Application.StatusBar = "Очистка ключей - " & phase & ": " & Format$(doneCount, "#,##0") & " / " & Format$(totalCount, "#,##0")
+    End If
+End Sub
+
+Private Sub RestoreStatusBar(ByVal oldValue As Variant, ByRef shown As Boolean)
+    If Not shown Then Exit Sub
+    On Error Resume Next
+    Application.StatusBar = oldValue
+    shown = False
+End Sub
+
+' Ёмкость каждый раз удваивается, поэтому суммарная стоимость ReDim Preserve по ходу заполнения
+' остаётся O(n) амортизированно - в отличие от Collection.Item(i), который в VBA проходит связный
+' список от начала при каждом позиционном обращении (issue #1: заметно хуже линейного роста на
+' десятках тысяч ячеек, измерено на стенде: 8000->3.6с, 20000->10.7с, 40000->61.3с).
+Private Sub GrowPlanned(ByRef cells() As Range, ByRef olds() As String, ByRef news() As String, ByRef fmts() As Variant, ByRef capacity As Long)
+    If capacity = 0 Then
+        capacity = 1024
+        ReDim cells(1 To capacity)
+        ReDim olds(1 To capacity)
+        ReDim news(1 To capacity)
+        ReDim fmts(1 To capacity)
+    Else
+        capacity = capacity * 2
+        ReDim Preserve cells(1 To capacity)
+        ReDim Preserve olds(1 To capacity)
+        ReDim Preserve news(1 To capacity)
+        ReDim Preserve fmts(1 To capacity)
+    End If
 End Sub
 
 Private Sub RestoreCell(ByVal c As Range, ByVal oldValue As String, ByVal oldFormat As Variant)
@@ -192,13 +241,21 @@ End Function
 
 ' Разное оформление внутри одной ячейки: свойство шрифта возвращает Null, если оно неодинаково
 ' по символам. Проверяются все свойства, которые можно назначить через Characters(...).Font.
+' На реальных книгах (не на пустом новом листе) отдельные свойства шрифта - в первую очередь
+' ThemeColor/ThemeFont на нетемной/унаследованной от старых версий заливке - могут не вернуть
+' Null, а бросить настоящую ошибку выполнения. Если проверку нельзя провести чисто, ячейка
+' считается неоднозначной и пропускается - та же логика, что и для настоящего rich text.
 Private Function IsRichText(ByVal c As Range) As Boolean
+    On Error GoTo Unclear
     With c.Font
         IsRichText = IsNull(.Bold) Or IsNull(.Italic) Or IsNull(.Color) Or IsNull(.Size) _
                      Or IsNull(.Name) Or IsNull(.Underline) Or IsNull(.Strikethrough) _
                      Or IsNull(.Superscript) Or IsNull(.Subscript) Or IsNull(.FontStyle) _
                      Or IsNull(.ThemeColor) Or IsNull(.TintAndShade) Or IsNull(.ThemeFont)
     End With
+    Exit Function
+Unclear:
+    IsRichText = True
 End Function
 
 ' Текст пишется как текст: формат "@" на время записи, потом прежний формат обратно.
@@ -319,13 +376,13 @@ Private Function Report(st As Stats, c As Boolean, l As Boolean, r As Boolean, n
     If st.richText > 0 Then m = m & "Пропущено с разным оформлением символов: " & st.richText & vbCrLf
     m = m & vbCrLf
     If c Then
-        m = m & ChrW(&H2713) & " Кириллица: заменено символов " & st.homoglyphs
+        m = m & "- Кириллица: заменено символов " & st.homoglyphs
         If st.ambiguous > 0 Then m = m & "; не тронуто ячеек с кириллицей (русский текст или код без цифр/латиницы): " & st.ambiguous
         m = m & vbCrLf
     End If
-    If l Then m = m & ChrW(&H2713) & " Переносов строк заменено: " & st.lineBreaks & vbCrLf
-    If r Then m = m & ChrW(&H2713) & " Пробельных и невидимых символов удалено: " & st.spacesRemoved & vbCrLf
-    If n Then m = m & ChrW(&H2713) & " Пробельных и невидимых символов убрано при нормализации: " & st.spacesCollapsed & vbCrLf
+    If l Then m = m & "- Переносов строк заменено: " & st.lineBreaks & vbCrLf
+    If r Then m = m & "- Пробельных и невидимых символов удалено: " & st.spacesRemoved & vbCrLf
+    If n Then m = m & "- Пробельных и невидимых символов убрано при нормализации: " & st.spacesCollapsed & vbCrLf
     If st.cellsChanged = 0 Then m = m & vbCrLf & "Изменений не найдено."
     Report = m
 End Function
