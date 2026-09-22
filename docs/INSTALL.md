@@ -7,7 +7,8 @@
 1. Откройте страницу релизов: **https://github.com/MShkolenko/excel-key-cleaner/releases**
 2. В последнем релизе нажмите `excel-key-cleaner.zip` — архив скачается в «Загрузки».
 3. Распакуйте архив (правая кнопка → «Извлечь всё…»). Внутри четыре файла:
-   `Cleaning.bas`, `CleaningForm.frm`, `CleaningForm.frx`, `INSTALL-FOR-CLAUDE.md`.
+   `Cleaning.bas`, `CleaningForm.frm`, `CleaningForm.frx`, эта инструкция (`INSTALL.md`) и
+   `INSTALL-FOR-CLAUDE.md` (то же для ИИ-агента).
    Первые три оставьте **в одной папке** — при импорте формы Excel сам подхватит `.frx`
    из папки, где лежит `.frm`.
 

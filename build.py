@@ -22,5 +22,6 @@ shutil.copy(SRC / 'CleaningForm.frx', DIST / 'CleaningForm.frx')
 with zipfile.ZipFile(DIST / 'excel-key-cleaner.zip', 'w', zipfile.ZIP_DEFLATED) as z:
     for name in ('Cleaning.bas', 'CleaningForm.frm', 'CleaningForm.frx'):
         z.write(DIST / name, name)
+    z.write(ROOT / 'docs' / 'INSTALL.md', 'INSTALL.md')
     z.write(ROOT / 'docs' / 'INSTALL-FOR-CLAUDE.md', 'INSTALL-FOR-CLAUDE.md')
 print('dist/excel-key-cleaner.zip written')
