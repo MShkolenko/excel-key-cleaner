@@ -721,16 +721,45 @@ Private Function IsCyrillic(ch As String) As Boolean
     IsCyrillic = (code >= &H400 And code <= &H4FF)
 End Function
 
-' Омоглифы меняются в строке, похожей на код: есть цифра, есть латинская буква, латинских букв не
-' меньше кириллических, и вся кириллица - из набора омоглифов. Русское слово ("ВЕТЕР", "СМР-2",
-' "МОСТ-A") остаётся как есть - и ЗАПОМИНАЕТСЯ по адресу, чтобы попасть в отчёт и в выделение.
-' С флажком "в выделении только коды" проверка отключена: меняется всё, что есть в карте.
+' Омоглифы меняются ПОСЛОВНО. Слово - кусок между пробельными символами (IsSpaceLike, так что
+' неразрывный пробел тоже делит слова). Правило внутри слова прежнее: есть цифра, есть латинская
+' буква, латинских не меньше кириллических, и вся кириллица - из набора омоглифов.
+' Почему по слову, а не по ячейке: в наименованиях рядом стоят русское слово и код, и решение по
+' ячейке ошибается в обе стороны. "Насос RPR.0120.10UMA" -> "Hacoc RPR.0120.10UMA" (в слове
+' "Насос" все буквы есть в карте, а латиницы в ячейке больше, чем кириллицы, поэтому порог
+' пропускал). И наоборот: "Опора RPR.0120.10UМА" не чинилась вовсе - буква "п" вне карты
+' браковала всю ячейку вместе с кодом. Пословно: слово остаётся целым, код в той же ячейке чинится.
+' Дефис и точка разделителями НЕ считаются - иначе развалятся коды вида RPR.0120.10УМА, где
+' латиница стоит в соседней части кода.
 Private Function FixHomoglyphs(s As String, ByRef st As Stats, ByVal onlyCodes As Boolean, ByVal c As Range, ByRef leftCells As Range) As String
-    Dim i As Long, ch As String, nLatin As Long, nCyr As Long, hasDigit As Boolean, n As Long, allMapped As Boolean
-    FixHomoglyphs = s
-    allMapped = True
+    Dim i As Long, ch As String, res As String, word As String, cyrLeftHere As Boolean
     For i = 1 To Len(s)
         ch = Mid$(s, i, 1)
+        If IsSpaceLike(ch) Then
+            res = res & FixHomoglyphsWord(word, st, onlyCodes, cyrLeftHere) & ch
+            word = vbNullString
+        Else
+            word = word & ch
+        End If
+    Next i
+    res = res & FixHomoglyphsWord(word, st, onlyCodes, cyrLeftHere)
+    ' ячейка считается и попадает в выделение ОДИН раз, даже если непочиненных слов в ней несколько
+    If cyrLeftHere Then
+        st.cyrLeft = st.cyrLeft + 1
+        AddTo leftCells, c
+    End If
+    FixHomoglyphs = res
+End Function
+
+' Одно слово. Возвращает исправленное слово; cyrLeftHere поднимается, если в слове осталась
+' кириллица, которую менять не стали (ячейку назовёт вызывающая функция).
+Private Function FixHomoglyphsWord(ByVal w As String, ByRef st As Stats, ByVal onlyCodes As Boolean, ByRef cyrLeftHere As Boolean) As String
+    Dim i As Long, ch As String, nLatin As Long, nCyr As Long, hasDigit As Boolean, n As Long, allMapped As Boolean
+    FixHomoglyphsWord = w
+    If Len(w) = 0 Then Exit Function
+    allMapped = True
+    For i = 1 To Len(w)
+        ch = Mid$(w, i, 1)
         If (ch >= "A" And ch <= "Z") Or (ch >= "a" And ch <= "z") Then
             nLatin = nLatin + 1
         ElseIf ch >= "0" And ch <= "9" Then
@@ -743,24 +772,20 @@ Private Function FixHomoglyphs(s As String, ByRef st As Stats, ByVal onlyCodes A
     If nCyr = 0 Then Exit Function
     If Not onlyCodes Then
         If Not allMapped Or Not hasDigit Or nLatin = 0 Or nLatin < nCyr Then
-            st.cyrLeft = st.cyrLeft + 1
-            AddTo leftCells, c
+            cyrLeftHere = True
             Exit Function
         End If
     End If
     For i = 1 To Len(HOMO_FROM)
         ch = Mid$(HOMO_FROM, i, 1)
-        n = Len(s) - Len(Replace(s, ch, vbNullString))
+        n = Len(w) - Len(Replace(w, ch, vbNullString))
         If n > 0 Then
             st.homoglyphs = st.homoglyphs + n
-            s = Replace(s, ch, Mid$(HOMO_TO, i, 1))
+            w = Replace(w, ch, Mid$(HOMO_TO, i, 1))
         End If
     Next i
-    If onlyCodes And Not allMapped Then   ' буквы вне карты (Ж, Ш, У...) остались - назвать ячейку
-        st.cyrLeft = st.cyrLeft + 1
-        AddTo leftCells, c
-    End If
-    FixHomoglyphs = s
+    If onlyCodes And Not allMapped Then cyrLeftHere = True   ' буквы вне карты (Ж, Ш, У...) остались
+    FixHomoglyphsWord = w
 End Function
 
 Private Function CountOf(s As String, what As String) As Long
