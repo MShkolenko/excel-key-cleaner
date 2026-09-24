@@ -1,6 +1,7 @@
 """Speed + selection gate for the case a real sheet exposed (v3.1, 2026-09-24).
 
-Half the cells are Russian words the macro must NAME and SELECT, laid out so that no two of them
+Half the cells are suspicious leftovers the macro must SELECT (since v3.3 a Latin and a Cyrillic
+letter in one word, "СЕ.U7", which the rule does not fix), laid out so that no two of them
 touch (two columns, alternating rows): every one becomes its own area of the final selection.
 The one-cell-at-a-time Union that used to build that selection grows roughly as the CUBE of the
 area count - a real 63 109-cell sheet took 15 minutes. tests/Measure-Speed.ps1 never hit this: its
@@ -18,7 +19,7 @@ import pythoncom, win32com.client
 
 dist = os.path.abspath(sys.argv[1])
 sizes = [int(a) for a in sys.argv[2:]] or [2000, 8000, 20000]
-WORD = 'Насос'
+LEFT = 'СЕ.U'          # + a number: Latin 1 < Cyrillic 2 -> left, and mixed -> selected
 CYR_R = 'Р'
 
 src = open(os.path.join(dist, 'Cleaning.bas'), encoding='cp1251').read()
@@ -62,7 +63,7 @@ try:
         rows = n // 2
         data = []
         for i in range(rows):
-            code, word = f'AB{i} {CYR_R}', f'{WORD} {i}'
+            code, word = f'AB{i} {CYR_R}', f'{LEFT}{i}'
             data.append((word, code) if i % 2 else (code, word))
         rng = ws.Range(ws.Cells(1, 2), ws.Cells(rows, 3))
         rng.NumberFormat = '@'

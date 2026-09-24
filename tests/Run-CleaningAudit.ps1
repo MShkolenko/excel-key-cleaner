@@ -404,7 +404,9 @@ try {
         # index. So the report must NOT claim "formatting reset"; it must name the cell and warn
         # that the formatting may now sit on other characters.
         Expect ($b.Characters(1, 1).Font.Bold -eq $true) '256 chars: Excel keeps the runs by index'
-        Expect ($msg -match 'B3') '256 chars: the cell written whole is NAMED in the report'
+        $parts = $msg -split '\|SELECTED=', 2                                     # since v3.3: counts in the text, cells in the selection
+        Expect ($parts[1] -match 'B3') '256 chars: the cell written whole is SELECTED on the sheet'
+        Expect ($parts[0] -notmatch '(?<![A-Z])B3(?![0-9])') '256 chars: the report text names no cell'
         'B2(255): last=[' + $a.Value2.Substring(254) + '] bold(1)=' + $a.Characters(1, 1).Font.Bold + ' ; B3(256): last=[' + $b.Value2.Substring(255) + '] bold(1)=' + $b.Characters(1, 1).Font.Bold + ' ; ' + ($msg -replace "`r`n", ' | ')
     }
 
@@ -626,14 +628,19 @@ try {
         foreach ($i in 4..16) { $c = $ws.Range('D' + $i); $c.NumberFormat = '@'; $c.Value2 = ($cyrA + $cyrB + $cyrO + $cyrT) }
         $ws.Rows('10:10').Hidden = $true                                         # hidden text -> head grows
         $ws.Range('F2:G2').Merge(); $ws.Range('F2').NumberFormat = '@'; $ws.Range('F2').Value2 = ('AB1' + $cyrR)
-        $ws.Range('B1:F16').Select() | Out-Null                                  # cuts the merge -> exception
+        # Since v3.3 the report names no cells, so the address lists no longer fill it; a suspicious cell
+        # (Latin and Cyrillic in one word, left alone) adds its own two lines, and this many exceptions
+        # still overflow one window - the path under test.
+        $d17 = $ws.Range('D17'); $d17.NumberFormat = '@'; $d17.Value2 = ([string][char]0x0421 + [string][char]0x0415 + '.U1')
+        $ws.Range('B1:F17').Select() | Out-Null                                  # cuts the merge -> exception
         $msg = RunMacro $true $false $false $true
         Expect ($msg -match 'NEXT MSGBOX') 'the alarm block was shown in its own window first'
         $first = ($msg -split '\|NEXT MSGBOX\|')[0]
-        $second = ($msg -split '\|NEXT MSGBOX\|')[1]
+        $second = (($msg -split '\|NEXT MSGBOX\|')[1] -split '\|SELECTED=', 2)[0]
         Expect ($first -match 'injected') 'that first window carries the post-write error'
         Expect ($first.Length -lt 600) 'the separate alarm window is short enough to be read whole'
         Expect ($second.Length -gt 1000) 'the full report really did overflow the budget'
+        Expect (($first + $second) -notmatch '(?<![A-Za-z0-9])[A-Z]{1,3}[1-9][0-9]{0,6}(?![A-Za-z0-9])') 'no window names a cell'
         'len(alarm window)=' + $first.Length + ' len(report)=' + $second.Length + ' ; ' + ($msg -replace "`r`n", ' | ')
     }
 

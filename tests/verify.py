@@ -37,7 +37,9 @@ for (opt, cid), r in act.items():
     if set(v) & HOMO: print(f"INVARIANT I1 FAIL {cid}: homoglyph left in {v!r}"); inv_fail += 1
     if set(v) & BAD_WS: print(f"INVARIANT I1 FAIL {cid}: bad whitespace left in {v!r}"); inv_fail += 1
     if v != v.strip(' '): print(f"INVARIANT I1 FAIL {cid}: edge space left in {v!r}"); inv_fail += 1
-# I2: with the default set (D) every case whose result still holds Cyrillic is NAMED in the report and SELECTED
+# I2 (v3.3, operator 2026-09-24): with D and O every case with Cyrillic left is COUNTED in the report; the
+# SUSPICIOUS ones (a Latin and a Cyrillic letter in one word, or a letter with no Latin pair left in a
+# converted word) are SELECTED, Russian text is NOT selected; the report text names no cell at all.
 reports = {}
 with open(REPORTS, encoding='utf-8-sig') as f:
     for line in f:
@@ -57,20 +59,28 @@ def expand(addr):
         elif tok:
             out.add(tok)
     return out
-MAX_LISTED = 12
 for opt in ('D', 'O'):
     msg = reports.get(opt, '')
-    m = re.search(r'[|]SELECTED=([^|]+)$', msg)
-    selected = expand(m.group(1)) if m else set()
-    left = [(cid, e) for (o, cid), e in exp.items() if o == opt and e['cyr_left'] == '1']
-    for k, (cid, e) in enumerate(left):
-        addr = f"B{row_of[cid]}"
-        if k < MAX_LISTED and not re.search(r'(?<![A-Z])' + addr + r'(?![0-9])', msg):
-            print(f"INVARIANT I2 FAIL [{opt}] {cid}: {addr} not named in the report"); inv_fail += 1
-        if addr not in selected:
-            print(f"INVARIANT I2 FAIL [{opt}] {cid}: {addr} not in the final selection ({sorted(selected)})"); inv_fail += 1
-    if not left and opt == 'D':
-        print("INVARIANT I2: no Cyrillic-left cases in D - check the case table"); inv_fail += 1
+    text, _, sel = msg.partition('|SELECTED=')
+    selected = expand(sel.split('|')[0]) if sel else set()
+    rows = [(cid, e) for (o, cid), e in exp.items() if o == opt]
+    n_left = sum(e['cyr_left'] == '1' for _, e in rows)
+    n_susp = sum(e['suspicious'] == '1' for _, e in rows)
+    # exact, not just "contains" (Codex, v3.3 review): the final selection IS the suspicious set, the
+    # report text names no cell of any column, and each count line appears once with the right number
+    want_sel = {f"B{row_of[cid]}" for cid, e in rows if e['suspicious'] == '1'}
+    if selected != want_sel:
+        print(f"INVARIANT I2 FAIL [{opt}]: selection {sorted(selected)} != suspicious {sorted(want_sel)}"); inv_fail += 1
+    named = re.findall(r'(?<![A-Za-z0-9])[A-Z]{1,3}[1-9][0-9]{0,6}(?![A-Za-z0-9])', text)
+    if named:
+        print(f"INVARIANT I2 FAIL [{opt}]: the report text names cells {named} (no addresses since v3.3)"); inv_fail += 1
+    mixed_head = 'БУКВЫ БЕЗ ЛАТИНСКОЙ ПАРЫ (Ж, Ш, У, Ы...) остались в ' if opt == 'O' else 'ЛАТИНИЦА И КИРИЛЛИЦА В ОДНОМ СЛОВЕ: '
+    for head, n in ((mixed_head, n_susp), ('Русский текст оставлен как есть: ', n_left - n_susp)):
+        got = re.findall(re.escape(head) + r'(\d+) яч\.', text)
+        if got != ([str(n)] if n else []):
+            print(f"INVARIANT I2 FAIL [{opt}]: {head!r} lines {got}, expected {[n] if n else 'none'}"); inv_fail += 1
+    if opt == 'D' and not (n_susp and n_left - n_susp):
+        print("INVARIANT I2: D needs both suspicious and Russian-text cases - check the case table"); inv_fail += 1
 print(f"invariants: {'all OK' if inv_fail == 0 else str(inv_fail) + ' FAIL'}")
 # a verifier that prints failures and exits 0 is not a gate (Codex round 6)
 sys.exit(1 if (fail or inv_fail) else 0)

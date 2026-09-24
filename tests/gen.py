@@ -181,6 +181,9 @@ CASES = [
     ('c52', 'Air сompressed 12 bar', 'v3.1: an English word typed with a Cyrillic letter in a code-like cell - fixed, as in v3.0'),
     ('c53', 'Axes А-В, 12 m', 'v3.1: axes in upper-case Cyrillic in a code-like cell - fixed, as in v3.0'),
     ('c54', 'Pump 5 с valve', 'v3.1: a lone lower-case Cyrillic letter is a Russian word - named, not fixed (v3.0 made it c)'),
+    # v3.3: only suspicious cells are selected; Russian text is counted
+    ('c55', 'Cекция 10', 'v3.3: a Russian word typed with a Latin C - left, SELECTED as suspicious'),
+    ('c56', 'кг/kg 5', 'v3.3: a Russian/English pair glued by a slash is Russian text - counted, NOT selected'),
 ]
 with open(HERE / 'cases.csv', 'w', encoding='utf-8-sig', newline='') as f:
     w = csv.writer(f, quoting=csv.QUOTE_ALL)
@@ -222,6 +225,26 @@ def homoglyphs3(t, o):
                 w = ''.join(MAP2.get(ch, ch) for ch in w)
         out.append(w)
     return ''.join(out)
+
+# v3.3: which cells with Cyrillic left are SELECTED (the rest is Russian text: counted, not selected).
+# A word that keeps Cyrillic makes the cell suspicious when it was converted and still holds a letter
+# with no Latin pair, or when it was left alone and one of its '/'-separated pieces holds both an ASCII
+# Latin letter and a Cyrillic letter ("СЕ.U1", "Cекция" - but not "кг/kg").
+def suspicious3(t, o):
+    from itertools import groupby
+    cell_ok = _code_like(t)
+    for brk, g in groupby(t, key=lambda ch: ch in BREAK3):
+        w = ''.join(g)
+        if brk or not any(_cyr(ch) for ch in w):
+            continue
+        russian = (not any(_lat(ch) or _dig(ch) for ch in w)) and any('\u0430' <= ch <= '\u045f' for ch in w)
+        converted = o or (not russian and (cell_ok or _code_like(w)))
+        if converted:
+            if any(_cyr(ch) and ch not in MAP2 for ch in w):
+                return True
+        elif any(any(_lat(ch) for ch in piece) and any(_cyr(ch) for ch in piece) for piece in w.split('/')):
+            return True
+    return False
 
 def mirror2(s, c, l, r, n, o=0):
     t = s
@@ -289,10 +312,11 @@ with open(HERE / 'opts.csv', 'w', encoding='utf-8-sig', newline='') as f:
 
 with open(HERE / 'expected.csv', 'w', encoding='utf-8-sig', newline='') as f:
     w = csv.writer(f)
-    w.writerow(['opt', 'id', 'expected', 'cyr_left'])
+    w.writerow(['opt', 'id', 'expected', 'cyr_left', 'suspicious'])
     for k, v in OPTS.items():
         for cid, inp, _ in CASES:
             out = mirror(unesc(inp), *v)
             cyr_left = int(bool(v[0]) and any('\u0400' <= ch <= '\u04ff' for ch in out))
-            w.writerow([k, cid, esc(out), cyr_left])
+            susp = int(bool(v[0]) and V2 and suspicious3(unesc(inp), v[4]))
+            w.writerow([k, cid, esc(out), cyr_left, susp])
 print(f'\n{len(CASES)} cases x {len(OPTS)} option sets -> cases.csv, opts.csv, expected.csv, Cleaning_Test.bas')

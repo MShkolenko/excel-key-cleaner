@@ -5,8 +5,9 @@ Option Compare Binary   ' омоглифы и Replace зависят от рег
 ' Очистка ключей в ВЫДЕЛЕННЫХ ячейках: кириллические омоглифы -> латиница, переносы строк,
 ' невидимые символы, пробелы. Правило версии 3: ни одна текстовая ячейка выделения не остаётся
 ' необработанной молча. Ячейки с разным оформлением символов правятся посимвольно, оформление
-' сохраняется. Всё, что макрос по какой-то причине НЕ тронул, называется по адресу в отчёте и
-' выделяется на листе (выделение проверяется, а не предполагается). Ошибки не глотаются. Текст
+' сохраняется. Всё, что макрос НЕ тронул, посчитано в отчёте; на что стоит посмотреть - код, за
+' который правило не взялось, объединённая область не целиком, заголовок таблицы, - выделено на
+' листе (выделение проверяется, а не предполагается); адресов в отчёте нет. Ошибки не глотаются. Текст
 ' остаётся текстом - и это проверяется чтением после записи. План считается до первой записи;
 ' при ошибке (в том числе Ctrl+Break) уже записанное откатывается, rich text - из точной копии.
 
@@ -14,7 +15,7 @@ Option Compare Binary   ' омоглифы и Replace зависят от рег
 Private Const HOMO_FROM As String = "АВЕКМНОРСТХаеорсх"
 Private Const HOMO_TO As String = "ABEKMHOPCTXaeopcx"
 
-Private Const MAX_LISTED As Long = 12      ' адресов на группу в отчёте; остальные - "и ещё N"
+Private Const MAX_LISTED As Long = 12      ' адресов в аварийном сообщении о сорвавшемся откате; остальные - "и ещё N"
 ' Измерено (Excel 2024): правки через Range.Characters на тексте длиннее 255 символов - молчаливый
 ' no-op (255 работает, 256 - нет). Такие rich-ячейки пишутся целиком и перечисляются в отчёте.
 Private Const RICH_EDIT_MAX As Long = 255
@@ -42,7 +43,8 @@ Private Type Stats
     spacesRemoved As Long
     spacesCollapsed As Long
     edgesTrimmed As Long    ' пробелы и невидимые по краям - убираются ВСЕГДА, независимо от флажков
-    cyrLeft As Long
+    cyrLeft As Long         ' ячеек, где кириллица осталась (всего)
+    cyrMixed As Long        ' из них подозрительных: латиница и кириллица в одном слове - выделяются
     mergedPartial As Long
     tableHeaders As Long
 End Type
@@ -72,8 +74,8 @@ Public Sub CleanKeys()
     Dim st As Stats
     Dim plannedCells() As Range, plannedOld() As String, plannedNew() As String, plannedFmt() As Variant, plannedKind() As Long
     Dim plannedCount As Long, plannedCapacity As Long
-    Dim cyrLeftCells As Range, flattenedCells As Range, mergedPartial As Range, headerCells As Range
-    Dim cyrLeftRuns As CellRuns, flattenedRuns As CellRuns, mergedRuns As CellRuns, headerRuns As CellRuns
+    Dim cyrMixedCells As Range, flattenedCells As Range, mergedPartial As Range, headerCells As Range
+    Dim cyrMixedRuns As CellRuns, flattenedRuns As CellRuns, mergedRuns As CellRuns, headerRuns As CellRuns
     Dim backup As Workbook, backupRow As Long, plannedBackupRow() As Long, srcBook As Workbook
     Dim s0 As String, s As String, isRich As Boolean, crDrop As Long
     Dim i As Long, attempted As Long, rolledBack As Long, rollbackFailed As Long, richRestoreFailed As Range
@@ -164,7 +166,7 @@ Public Sub CleanKeys()
         End If
         s0 = cell.Value2
         s = s0
-        If doCyrillic Then s = FixHomoglyphs(s, st, onlyCodes, cell, cyrLeftRuns)
+        If doCyrillic Then s = FixHomoglyphs(s, st, onlyCodes, cell, cyrMixedRuns)
         If doLineBreaks Then s = FixLineBreaks(s, st)
         If doRemoveSpaces Then s = RemoveSpaces(s, st)
         If doNormalizeSpaces Then s = NormalizeSpaces(s, st)
@@ -256,11 +258,11 @@ NextCell:
 
     ' Исключения выделяются, пока события ещё выключены (чужой Worksheet_SelectionChange не может
     ' перехватить), и результат ПРОВЕРЯЕТСЯ - слово "выделены" в отчёте появится только по факту.
-    Set cyrLeftCells = RunsToRange(cyrLeftRuns)
+    Set cyrMixedCells = RunsToRange(cyrMixedRuns)
     Set mergedPartial = RunsToRange(mergedRuns)
     Set headerCells = RunsToRange(headerRuns)
     Set flattenedCells = RunsToRange(flattenedRuns)
-    Set exceptions = UnionOf(cyrLeftCells, mergedPartial, headerCells, flattenedCells)
+    Set exceptions = UnionOf(cyrMixedCells, mergedPartial, headerCells, flattenedCells)
     selectedOk = SelectVerified(exceptions)
     If Not backup Is Nothing Then backupName = backup.Name
     backupLeftOpen = Not CloseBackup(backup)
@@ -271,7 +273,7 @@ PostDone:
     appLeft = RestoreApp(oldSU, oldEE, oldCalc, oldCancel, calcChanged, appChanged)
     On Error GoTo 0
     msg = Report(st, doCyrillic, doLineBreaks, doRemoveSpaces, doNormalizeSpaces, onlyCodes, _
-                 cyrLeftCells, flattenedCells, mergedPartial, headerCells, selectedOk, _
+                 flattenedCells, mergedPartial, headerCells, selectedOk, _
                  backupLeftOpen, backupName, appLeft, postErr, nothingChosen)
     ' Аварийные предупреждения стоят сразу после заголовка, но если отчёт ВСЁ РАВНО длиннее окна,
     ' MsgBox обрежет хвост - поэтому сначала отдельное окно только с ними. Лишний щелчок здесь
@@ -833,14 +835,17 @@ End Function
 ' рабочих книгах это были только они. Цена: "ВЕТЕР XX.0120.10UMA" (русское слово ЗАГЛАВНЫМИ рядом
 ' с длинным кодом) по-прежнему станет "BETEP" - как и в v3.0; слово, приклеенное к коду без
 ' пробела ("Насос-XX.0120.10UMA", "4-х/Safety"), - одно слово, и решение по нему общее.
-' Всё, где кириллица осталась, называется и выделяется. С флажком 5 проверок нет: меняется всё,
-' что есть в карте; буквы вне карты называют ячейку.
+' Где кириллица осталась, ячейка СЧИТАЕТСЯ (st.cyrLeft). Выделяется только подозрительная (v3.3,
+' владелец 2026-09-24: на листе русского текста список из 100 тысяч адресов - шум): латиница и
+' кириллица в одном куске слова (куски делит "/", чтобы "кг/kg" не считалось) - это похоже на код,
+' за который правило не взялось ("СЕ.U1", "07UУQ", "Cекция"); с флажком 5 - буква без латинской
+' пары. Такие идут в st.cyrMixed и в suspRuns. С флажком 5 проверок нет: меняется всё, что есть в карте.
 ' Замена 1:1, длина строки не меняется - правка на месте через Mid$, строка по символу не склеивается.
-Private Function FixHomoglyphs(s As String, ByRef st As Stats, ByVal onlyCodes As Boolean, ByVal c As Range, ByRef leftRuns As CellRuns) As String
+Private Function FixHomoglyphs(s As String, ByRef st As Stats, ByVal onlyCodes As Boolean, ByVal c As Range, ByRef suspRuns As CellRuns) As String
     Dim res As String, n As Long, i As Long, j As Long, p As Long, wStart As Long, code As Long
     Dim wLat As Long, wCyr As Long, wDigit As Boolean, wMapped As Boolean, wLower As Boolean, ch As String, w As String
     Dim cLat As Long, cCyr As Long, cDigit As Boolean, cMapped As Boolean, cellOk As Boolean
-    Dim leftHere As Boolean, doFix As Boolean
+    Dim leftHere As Boolean, doFix As Boolean, pLat As Boolean, pCyr As Boolean, wMixed As Boolean, suspHere As Boolean
     FixHomoglyphs = s
     n = Len(s)
     ' проход 1 - правило кода по всей ячейке (как в v3.0)
@@ -868,19 +873,26 @@ Private Function FixHomoglyphs(s As String, ByRef st As Stats, ByVal onlyCodes A
             Select Case code
                 Case 65 To 90, 97 To 122
                     wLat = wLat + 1
+                    pLat = True
                     GoTo NextChar
                 Case 48 To 57
                     wDigit = True
                     GoTo NextChar
                 Case &H400 To &H4FF
                     wCyr = wCyr + 1
+                    pCyr = True
                     If code >= &H430 And code <= &H45F Then wLower = True
                     If InStr(HOMO_FROM, ch) = 0 Then wMapped = False
+                    GoTo NextChar
+                Case 47                                            ' "/" - граница куска, не слова
+                    If pLat And pCyr Then wMixed = True
+                    pLat = False: pCyr = False
                     GoTo NextChar
             End Select
             If Not IsWordBreak(ch) Then GoTo NextChar
         End If
         ' конец слова s[wStart .. i-1] (пустое слово между двумя границами ничего не меняет)
+        If pLat And pCyr Then wMixed = True
         If wCyr > 0 Then
             If onlyCodes Then
                 doFix = True
@@ -899,18 +911,24 @@ Private Function FixHomoglyphs(s As String, ByRef st As Stats, ByVal onlyCodes A
                     End If
                 Next j
                 Mid$(res, wStart, Len(w)) = w                      ' длина та же: замена 1:1
-                If Not wMapped Then leftHere = True                ' буквы вне карты (Ж, Ш, У...) остались
+                If Not wMapped Then                                ' буквы вне карты (Ж, Ш, У...) остались
+                    leftHere = True
+                    suspHere = True                                ' в слове, которое меняли, - подозрительно
+                End If
             Else
                 leftHere = True
+                If wMixed Then suspHere = True
             End If
         End If
         wStart = i + 1: wLat = 0: wCyr = 0: wDigit = False: wMapped = True: wLower = False
+        pLat = False: pCyr = False: wMixed = False
 NextChar:
     Next i
-    ' ячейка считается и попадает в выделение ОДИН раз, сколько бы слов в ней ни осталось
-    If leftHere Then
-        st.cyrLeft = st.cyrLeft + 1
-        Collect leftRuns, c
+    ' ячейка считается ОДИН раз, сколько бы слов в ней ни осталось; выделяется - только подозрительная
+    If leftHere Then st.cyrLeft = st.cyrLeft + 1
+    If suspHere Then
+        st.cyrMixed = st.cyrMixed + 1
+        Collect suspRuns, c
     End If
     FixHomoglyphs = res
 End Function
@@ -1062,28 +1080,21 @@ End Function
 ' Исключения идут ПЕРВЫМИ и в бюджет MsgBox укладываются раньше статистики: если что-то придётся
 ' обрезать, это будут цифры, а не адреса.
 Private Function Report(ByRef st As Stats, ByVal c As Boolean, ByVal l As Boolean, ByVal r As Boolean, ByVal n As Boolean, _
-                        ByVal onlyCodes As Boolean, ByVal leftCells As Range, ByVal flattened As Range, ByVal mergedPartial As Range, _
+                        ByVal onlyCodes As Boolean, ByVal flattened As Range, ByVal mergedPartial As Range, _
                         ByVal headers As Range, ByVal selectedOk As Boolean, ByVal backupLeftOpen As Boolean, _
                         ByVal backupName As String, ByVal appLeft As String, ByVal postErr As String, _
                         ByVal nothingChosen As Boolean) As String
-    Dim head As String, alarm As String, exc As String, stat As String, listMax As Long, tryMax As Variant
-    ' Бюджет MsgBox: аварийные предупреждения идут ПЕРВЫМИ и не обрезаются никогда; списки адресов
-    ' укорачиваются ступенями; статистика добавляется, только если остаётся место.
+    Dim head As String, alarm As String, exc As String, stat As String
+    ' Бюджет MsgBox: аварийные предупреждения идут ПЕРВЫМИ и не обрезаются никогда; статистика
+    ' добавляется, только если остаётся место. Адресов ячеек в отчёте нет (владелец, 2026-09-24):
+    ' то, на что стоит посмотреть, выделено на листе, остальное - числом.
     alarm = ReportAlarm(backupLeftOpen, backupName, appLeft, postErr)
-    For Each tryMax In Array(IIf(selectedOk, MAX_LISTED, 40), MAX_LISTED, 6, 3, 1)
-        listMax = tryMax
-        head = ReportHead(st, nothingChosen)
-        exc = ReportExceptions(st, onlyCodes, leftCells, flattened, mergedPartial, headers, selectedOk, listMax)
-        If Len(head) + Len(alarm) + Len(exc) <= REPORT_BUDGET Then Exit For
-    Next tryMax
+    head = ReportHead(st, nothingChosen)
+    exc = ReportExceptions(st, onlyCodes, flattened, mergedPartial, headers, selectedOk)
     stat = ReportStats(st, c, l, r, n, onlyCodes, Len(exc) = 0)
     Report = head & alarm & exc
     If Len(Report) + Len(stat) <= REPORT_BUDGET Then Report = Report & stat
 End Function
-
-' То, что пользователь обязан увидеть, даже если не прочитает ничего больше: ошибка после записи,
-' незакрытая резервная книга, невосстановленное состояние Excel. Поэтому этот блок стоит вверху
-' отчёта, а при переполнении показывается ещё и отдельным окном (см. CleanKeys).
 Private Function ReportAlarm(ByVal backupLeftOpen As Boolean, ByVal backupName As String, _
                              ByVal appLeft As String, ByVal postErr As String) As String
     Dim a As String
@@ -1114,40 +1125,45 @@ Private Function ReportHead(ByRef st As Stats, ByVal nothingOn As Boolean) As St
     ReportHead = head & vbCrLf
 End Function
 
-Private Function ReportExceptions(ByRef st As Stats, ByVal onlyCodes As Boolean, ByVal leftCells As Range, ByVal flattened As Range, _
-                                  ByVal mergedPartial As Range, ByVal headers As Range, ByVal selectedOk As Boolean, _
-                                  ByVal listMax As Long) As String
+Private Function ReportExceptions(ByRef st As Stats, ByVal onlyCodes As Boolean, ByVal flattened As Range, _
+                                  ByVal mergedPartial As Range, ByVal headers As Range, ByVal selectedOk As Boolean) As String
     Dim exc As String
-    If Not leftCells Is Nothing Then
-        exc = exc & vbCrLf & "КИРИЛЛИЦА ОСТАВЛЕНА в " & st.cyrLeft & " яч.: " & ListAddresses(leftCells, listMax) & vbCrLf & _
-              IIf(onlyCodes, "(буквы без латинской пары: Ж, Ш, У, Ы...)", "(русский текст или код без цифр/латиницы; флажок 5 меняет везде)") & vbCrLf
+    ' На что стоит посмотреть - числом здесь, а сами ячейки выделены на листе.
+    If st.cyrMixed > 0 Then
+        If onlyCodes Then
+            exc = exc & vbCrLf & "БУКВЫ БЕЗ ЛАТИНСКОЙ ПАРЫ (Ж, Ш, У, Ы...) остались в " & st.cyrMixed & " яч." & vbCrLf
+        Else
+            exc = exc & vbCrLf & "ЛАТИНИЦА И КИРИЛЛИЦА В ОДНОМ СЛОВЕ: " & st.cyrMixed & " яч." & vbCrLf & _
+                  "(похоже на код, но правило не решилось; если это коды - повторите на выделении с флажком 5)" & vbCrLf
+        End If
     End If
     If Not headers Is Nothing Then
-        exc = exc & vbCrLf & "НЕ ТРОНУТО " & st.tableHeaders & " заголовков таблиц Excel: " & ListAddresses(headers, listMax) & vbCrLf & _
+        exc = exc & vbCrLf & "НЕ ТРОНУТО " & st.tableHeaders & " заголовков таблиц Excel" & vbCrLf & _
               "(Excel сам переименовывает дубликаты и правит ссылки на столбец; переименуйте вручную)" & vbCrLf
     End If
     If Not mergedPartial Is Nothing Then
-        exc = exc & vbCrLf & "НЕ ТРОНУТО " & st.mergedPartial & " объединённых яч., выделенных не целиком: " & _
-              ListAddresses(mergedPartial, listMax) & vbCrLf
+        exc = exc & vbCrLf & "НЕ ТРОНУТО " & st.mergedPartial & " объединённых яч., выделенных не целиком" & vbCrLf
     End If
     If Not flattened Is Nothing Then
-        exc = exc & vbCrLf & "ЗАПИСАНЫ ЦЕЛИКОМ " & st.richFlattened & " яч. с оформлением символов: " & _
-              ListAddresses(flattened, listMax) & vbCrLf & _
+        exc = exc & vbCrLf & "ЗАПИСАНЫ ЦЕЛИКОМ " & st.richFlattened & " яч. с оформлением символов" & vbCrLf & _
               "(посимвольная правка не сошлась; Excel оставляет оформление по позициям, и оно могло съехать - проверьте глазами)" & vbCrLf
     End If
     If Len(exc) > 0 Then
-        exc = exc & IIf(selectedOk, "Все перечисленные ячейки сейчас ВЫДЕЛЕНЫ на листе.", _
-                        "Выделить их на листе НЕ удалось (лист скрыт или выделение перехвачено) - ориентируйтесь на адреса выше.") & vbCrLf
+        exc = exc & IIf(selectedOk, "Эти ячейки сейчас ВЫДЕЛЕНЫ на листе.", _
+                        "Выделить их на листе НЕ удалось (лист скрыт или выделение перехвачено).") & vbCrLf
+    End If
+    ' Русский текст - не исключение: его проверили и оставили намеренно. Только число, без выделения.
+    If st.cyrLeft - st.cyrMixed > 0 Then
+        exc = exc & vbCrLf & "Русский текст оставлен как есть: " & (st.cyrLeft - st.cyrMixed) & " яч. (так и должно быть, не выделяется)." & vbCrLf
     End If
     ' Обязательное, но не аварийное: ячейка обработана полностью, просто Excel повёл себя так, и
-    ' молчать об этом нельзя. Входит в бюджет вместе с адресами, отбрасывается только статистика.
+    ' молчать об этом нельзя.
     If st.crlfToLf > 0 Then
         exc = exc & vbCrLf & "CRLF -> LF в " & st.crlfToLf & " яч. с оформлением символов: Excel сам убирает CR при посимвольной правке." & vbCrLf & _
               "(перенос строки на месте, оформление сохранено - ячейки обработаны полностью)" & vbCrLf
     End If
     ReportExceptions = exc
 End Function
-
 Private Function ReportStats(ByRef st As Stats, ByVal c As Boolean, ByVal l As Boolean, ByVal r As Boolean, ByVal n As Boolean, _
                              ByVal onlyCodes As Boolean, ByVal noExceptions As Boolean) As String
     Dim stat As String
