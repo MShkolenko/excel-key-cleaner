@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui" onLoad="Ribbon_OnLoad">
+  <ribbon>
+    <tabs>
+      <tab id="tabKeyCleaner" label="Очистка ключей" insertAfterMso="TabHome">
+        <group id="grpClean" label="Выделенные ячейки">
+          <button id="btnClean" size="large" imageMso="ClearAll" label="Очистить ключи"
+                  onAction="Ribbon_Clean"
+                  screentip="Очистить ключи в выделенных ячейках"
+                  supertip="Кириллица, набранная вместо латиницы в кодах; переносы строк; невидимые символы; лишние пробелы. Сначала откроется выбор действий. Всё, что макрос не тронул, он назовёт в отчёте и оставит выделенным."/>
+        </group>
+        <group id="grpAbout" label="Справка">
+          <button id="btnHelp" size="large" imageMso="Help" label="Как это работает"
+                  onAction="Ribbon_Help"
+                  screentip="Что меняется и что остаётся"
+                  supertip="Откроет страницу надстройки на GitHub: правила замены, пределы, установка."/>
+        </group>
+      </tab>
+    </tabs>
+  </ribbon>
+  <contextMenus>
+    <contextMenu idMso="ContextMenuCell">
+      <button id="ctxCleanCell" imageMso="ClearAll" label="Очистить ключи" onAction="Ribbon_Clean" insertBeforeMso="Cut"/>
+      <menuSeparator id="ctxSepCell" insertBeforeMso="Cut"/>
+    </contextMenu>
+    <contextMenu idMso="ContextMenuListRange">
+      <button id="ctxCleanTable" imageMso="ClearAll" label="Очистить ключи" onAction="Ribbon_Clean" insertBeforeMso="Cut"/>
+      <menuSeparator id="ctxSepTable" insertBeforeMso="Cut"/>
+    </contextMenu>
+  </contextMenus>
+</customUI>

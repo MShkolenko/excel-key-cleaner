@@ -1,6 +1,6 @@
 VERSION 5.00
 Begin {C62A69F0-16DC-11CE-9E98-00AA00574A4F} CleaningForm 
-   Caption         =   "Выбор действий макроса"
+   Caption         =   "Очистка ключей"
    ClientHeight    =   3520
    ClientLeft      =   -460
    ClientTop       =   -2050
@@ -41,7 +41,7 @@ End Sub
 Private Sub UserForm_Initialize()
     Me.Width = 600
     Me.Height = 450
-    Me.Caption = "Выбор действий макроса"
+    Me.Caption = "Очистка ключей"
 
     With Me.CheckBox1
         .Left = 30: .Top = 30: .Width = 540: .Height = 35: .Font.Size = 14
