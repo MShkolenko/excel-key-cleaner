@@ -163,6 +163,24 @@ CASES = [
     ('c36', '{LF} AB', 'a KEPT line break must not shield the space next to it'),
     ('c37', 'AB {LF}', 'the same at the trailing edge'),
     ('c38', '{LF}  ', 'the whole cell is whitespace AND a break must be kept - one run, not two'),
+    # v3.1: the decision is per WORD (PR #2) - a Russian word next to a code, and the code next to it
+    ('c39', 'Насос XX.0120.10UMA', 'v3.1: Russian word of homoglyphs next to a long Latin code - stays (v3.0 made it Hacoc)'),
+    ('c40', 'Насос ABC-1', 'v3.1: Russian word next to a short code - stays'),
+    ('c41', 'Опора XX.0120.10UМА', 'v3.1: code fixed although the word beside it has an unmapped letter'),
+    ('c42', 'XX.0120.10UМА', 'v3.1: the same code alone - fixed'),
+    ('c43', 'Насос{NBSP}XX.0120.10UMA', 'v3.1: NBSP separates words too'),
+    ('c44', 'СЕ U2 ABC 0002', 'v3.1: key segment typed wholly in Cyrillic after a space - fixed, because the whole cell is code-like and СЕ has no lower-case letter'),
+    ('c45', 'XX.0120.10U{ZWSP}МА', 'v3.1: a zero-width char is NOT a word break (it is deleted later) - one code, fixed'),
+    ('c46', 'Насос-XX.0120.10UMA', 'known residual (v3.0 too): a word glued to a code without a space is one word'),
+    ('c47', 'Насос32Q', 'stays: Latin 1 < Cyrillic 5'),
+    ('c48', 'Опора ХХ.U1 ABC', 'v3.1: the cell is not code-like (п) and ХХ.U1 alone is not either - named, not fixed'),
+    ('c49', 'ВЕТЕР XX.0120.10UMA', 'known limit (v3.0 too): an UPPER-case Russian word next to a long code in a code-like cell becomes BETEP'),
+    # v3.1: taught by copies of five real books (brackets glued "АС)(99UXX)", English typed with Cyrillic letters)
+    ('c50', 'Пункт управления (ПУ АС)(99UXX). Укрепление', 'v3.1: brackets split words - АС stays Russian next to a code in brackets'),
+    ('c51', 'Укладка плит Р1-150 (00UXX)', 'v3.1: Р1-150 has no Latin and the cell is Russian - stays'),
+    ('c52', 'Air сompressed 12 bar', 'v3.1: an English word typed with a Cyrillic letter in a code-like cell - fixed, as in v3.0'),
+    ('c53', 'Axes А-В, 12 m', 'v3.1: axes in upper-case Cyrillic in a code-like cell - fixed, as in v3.0'),
+    ('c54', 'Pump 5 с valve', 'v3.1: a lone lower-case Cyrillic letter is a Russian word - named, not fixed (v3.0 made it c)'),
 ]
 with open(HERE / 'cases.csv', 'w', encoding='utf-8-sig', newline='') as f:
     w = csv.writer(f, quoting=csv.QUOTE_ALL)
@@ -177,15 +195,38 @@ MAP2 = dict(zip('АВЕКМНОРСТХаеорсх', 'ABEKMHOPCTXaeopcx'))   # 
 WS2 = '\t\u00a0\u1680' + ''.join(chr(c) for c in range(0x2000, 0x200b)) + '\u202f\u205f\u3000'
 ZW2 = '\u200b\u200c\u200d\u2060\ufeff'   # zero-width: deleted, not turned into a space
 
+# v3.1 homoglyph rule, written from the rule text (not transcribed from the VBA):
+# words are runs between spaces/line breaks and ( ) [ ] { } , ; " ' « » - zero-width chars are NOT
+# breaks (they get deleted later), and neither are - . / (codes and coordinates live on them).
+# A Cyrillic word is converted when the word itself is code-like OR the whole cell is (the v3.0
+# test) - except a Russian word: Cyrillic only, no Latin, no digit, with a lower-case Cyrillic letter
+# (U+0430-045F). With the override everything mapped is converted.
+BREAK3 = set(' \t\n\x0b\x0c\r\x85\xa0     　') | set(chr(c) for c in range(0x2000, 0x200b)) \
+         | set('()[]{},;"\'«»')
+def _lat(ch): return ch.isascii() and ch.isalpha()
+def _dig(ch): return ch.isascii() and ch.isdigit()
+def _cyr(ch): return 'Ѐ' <= ch <= 'ӿ'
+def _code_like(chars):
+    cyr = [ch for ch in chars if _cyr(ch)]
+    lat = sum(1 for ch in chars if _lat(ch))
+    return any(_dig(ch) for ch in chars) and lat > 0 and lat >= len(cyr) and all(ch in MAP2 for ch in cyr)
+def homoglyphs3(t, o):
+    from itertools import groupby
+    cell_ok = _code_like(t)
+    out = []
+    for brk, g in groupby(t, key=lambda ch: ch in BREAK3):
+        w = ''.join(g)
+        if not brk and any(_cyr(ch) for ch in w):
+            russian = (not any(_lat(ch) or _dig(ch) for ch in w)) and any('а' <= ch <= 'џ' for ch in w)
+            if o or (not russian and (cell_ok or _code_like(w))):
+                w = ''.join(MAP2.get(ch, ch) for ch in w)
+        out.append(w)
+    return ''.join(out)
+
 def mirror2(s, c, l, r, n, o=0):
     t = s
     if c:
-        cyr = [ch for ch in t if 'Ѐ' <= ch <= 'ӿ']
-        n_latin = sum(1 for ch in t if ('A' <= ch <= 'Z') or ('a' <= ch <= 'z'))
-        has_digit = any('0' <= ch <= '9' for ch in t)
-        # code-like: a digit, a Latin letter, at least as many Latin as Cyrillic letters, all Cyrillic are homoglyphs
-        if cyr and (o or (has_digit and n_latin >= len(cyr) and all(ch in MAP2 for ch in cyr))):
-            t = ''.join(MAP2.get(ch, ch) for ch in t)
+        t = homoglyphs3(t, o)
     if l:
         t = t.replace('\r\n', ' ').replace('\r', ' ').replace('\n', ' ').replace('\u2028', ' ').replace('\u2029', ' ').replace('\u0085', ' ').replace('\u000b', ' ').replace('\u000c', ' ')
     if r:

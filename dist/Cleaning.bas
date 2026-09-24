@@ -50,6 +50,18 @@ End Type
 Private Const KIND_PLAIN As Long = 0
 Private Const KIND_RICH As Long = 1
 
+' Ячейки для итогового выделения, собранные полосами: соседние по вертикали ячейки одного столбца
+' склеиваются сразу при добавлении, Union строится один раз в конце (RunsToRange).
+Private Type CellRuns
+    sh As Worksheet
+    col() As Long
+    top() As Long
+    bottom() As Long
+    lastRun() As Long       ' по номеру столбца: индекс последней полосы этого столбца
+    n As Long
+    capacity As Long
+End Type
+
 ' Единственная точка входа. Прежнее имя Замена_Кирилицы_С_Выбором убрано по просьбе владельца
 ' (2026-09-22): макрос показывался в списке Excel дважды. Кнопке, назначенной на старое имя, надо
 ' один раз переназначить макрос на CleanKeys.
@@ -61,6 +73,7 @@ Public Sub CleanKeys()
     Dim plannedCells() As Range, plannedOld() As String, plannedNew() As String, plannedFmt() As Variant, plannedKind() As Long
     Dim plannedCount As Long, plannedCapacity As Long
     Dim cyrLeftCells As Range, flattenedCells As Range, mergedPartial As Range, headerCells As Range
+    Dim cyrLeftRuns As CellRuns, flattenedRuns As CellRuns, mergedRuns As CellRuns, headerRuns As CellRuns
     Dim backup As Workbook, backupRow As Long, plannedBackupRow() As Long, srcBook As Workbook
     Dim s0 As String, s As String, isRich As Boolean, crDrop As Long
     Dim i As Long, attempted As Long, rolledBack As Long, rollbackFailed As Long, richRestoreFailed As Range
@@ -135,19 +148,23 @@ Public Sub CleanKeys()
             ' Excel сам переименовывает дубликаты заголовков и правит структурные ссылки в формулах
             ' вне выделения - записать сюда значит получить не то, что запланировано, и тронуть чужое
             st.tableHeaders = st.tableHeaders + 1
-            AddTo headerCells, cell
+            Collect headerRuns, cell
             GoTo NextCell
         End If
-        If anyMerged And cell.MergeCells Then
+        ' MergeArea, а не MergeCells: чтение cell.MergeCells по ячейке копит GDI-объекты Excel (замер
+        ' 2026-09-24, копия рабочей книги 33 053 x 52: +9 562 за проход, 160 с, до потолка 10 000 -
+        ' после чего Workbooks.Add для резервной копии отказывал, и прогон откатывался целиком).
+        ' MergeArea.CountLarge на тех же ячейках: GDI не растёт, 1 с, те же 38 объединённых ячеек.
+        If anyMerged And cell.MergeArea.CountLarge > 1 Then
             If Application.Intersect(cell.MergeArea, sel).CountLarge <> cell.MergeArea.CountLarge Then
                 st.mergedPartial = st.mergedPartial + 1
-                AddTo mergedPartial, cell
+                Collect mergedRuns, cell
                 GoTo NextCell
             End If
         End If
         s0 = cell.Value2
         s = s0
-        If doCyrillic Then s = FixHomoglyphs(s, st, onlyCodes, cell, cyrLeftCells)
+        If doCyrillic Then s = FixHomoglyphs(s, st, onlyCodes, cell, cyrLeftRuns)
         If doLineBreaks Then s = FixLineBreaks(s, st)
         If doRemoveSpaces Then s = RemoveSpaces(s, st)
         If doNormalizeSpaces Then s = NormalizeSpaces(s, st)
@@ -222,7 +239,7 @@ NextCell:
                 ' формулировка "сброшено" была бы неправдой.
                 PutText plannedCells(i), plannedNew(i)
                 st.richFlattened = st.richFlattened + 1
-                AddTo flattenedCells, plannedCells(i)
+                Collect flattenedRuns, plannedCells(i)
             End If
         Else
             PutText plannedCells(i), plannedNew(i)
@@ -239,6 +256,10 @@ NextCell:
 
     ' Исключения выделяются, пока события ещё выключены (чужой Worksheet_SelectionChange не может
     ' перехватить), и результат ПРОВЕРЯЕТСЯ - слово "выделены" в отчёте появится только по факту.
+    Set cyrLeftCells = RunsToRange(cyrLeftRuns)
+    Set mergedPartial = RunsToRange(mergedRuns)
+    Set headerCells = RunsToRange(headerRuns)
+    Set flattenedCells = RunsToRange(flattenedRuns)
     Set exceptions = UnionOf(cyrLeftCells, mergedPartial, headerCells, flattenedCells)
     selectedOk = SelectVerified(exceptions)
     If Not backup Is Nothing Then backupName = backup.Name
@@ -680,6 +701,55 @@ Private Sub AddTo(ByRef acc As Range, ByVal c As Range)
     If acc Is Nothing Then Set acc = c Else Set acc = Application.Union(acc, c)
 End Sub
 
+' Union по одной ячейке растёт почти как КУБ от числа областей (замер на Excel 2024, 2026-09-24:
+' 1 000 ячеек - 0,3 с, 8 000 - 130 с), а на реальном листе с русским текстом таких ячеек десятки
+' тысяч: рабочий лист, 63 109 ячеек - 15 минут. Поэтому ячейки копятся полосами, а Union - один раз, деревом.
+Private Sub Collect(ByRef acc As CellRuns, ByVal c As Range)
+    Dim k As Long, r As Long, cl As Long
+    r = c.Row: cl = c.Column
+    If acc.n = 0 Then
+        Set acc.sh = c.Parent
+        acc.capacity = 256
+        ReDim acc.col(1 To acc.capacity): ReDim acc.top(1 To acc.capacity): ReDim acc.bottom(1 To acc.capacity)
+        ReDim acc.lastRun(1 To c.Parent.Columns.Count)
+    End If
+    k = acc.lastRun(cl)
+    If k > 0 Then
+        If acc.bottom(k) = r - 1 Then acc.bottom(k) = r: Exit Sub    ' продолжение полосы столбца
+    End If
+    If acc.n = acc.capacity Then
+        acc.capacity = acc.capacity * 2
+        ReDim Preserve acc.col(1 To acc.capacity): ReDim Preserve acc.top(1 To acc.capacity)
+        ReDim Preserve acc.bottom(1 To acc.capacity)
+    End If
+    acc.n = acc.n + 1
+    acc.col(acc.n) = cl: acc.top(acc.n) = r: acc.bottom(acc.n) = r
+    acc.lastRun(cl) = acc.n
+End Sub
+
+' Полосы -> один Range. Union попарно, уровнями (64 000 областей - 10 с), а не по одной (часы).
+Private Function RunsToRange(ByRef acc As CellRuns) As Range
+    Dim a() As Range, i As Long, n As Long
+    If acc.n = 0 Then Exit Function
+    ReDim a(1 To acc.n)
+    For i = 1 To acc.n
+        Set a(i) = acc.sh.Range(acc.sh.Cells(acc.top(i), acc.col(i)), acc.sh.Cells(acc.bottom(i), acc.col(i)))
+    Next i
+    n = acc.n
+    Do While n > 1
+        For i = 1 To n \ 2
+            Set a(i) = Application.Union(a(2 * i - 1), a(2 * i))
+        Next i
+        If n Mod 2 = 1 Then
+            Set a(n \ 2 + 1) = a(n)
+            n = n \ 2 + 1
+        Else
+            n = n \ 2
+        End If
+    Loop
+    Set RunsToRange = a(1)
+End Function
+
 Private Function UnionOf(ParamArray parts() As Variant) As Range
     Dim i As Long, acc As Range
     For i = LBound(parts) To UBound(parts)
@@ -690,18 +760,42 @@ Private Function UnionOf(ParamArray parts() As Variant) As Range
     Set UnionOf = acc
 End Function
 
-' Выделяет диапазон и ПРОВЕРЯЕТ, что выделение действительно стало им. False, если лист скрыт,
-' книга не активируется или выделение перехвачено - тогда отчёт не скажет "выделены".
+' Выделяет диапазон и ПРОВЕРЯЕТ, что каждая его ячейка действительно выделена. False, если лист
+' скрыт, книга не активируется или выделение не то - тогда отчёт не скажет "выделены".
+' Строки адреса целиком не сравниваются: при выделении Excel сам сливает соседние области в
+' прямоугольники (на рабочем листе: области B2:K2, A1:A7, ... -> выделение B2:K2,A1:K7,...), и
+' адрес выделения законно отличается при тех же ячейках - это давало ложное "выделить НЕ удалось".
+' Поэтому по областям: каждая область диапазона должна лежать целиком в одной области выделения.
 Private Function SelectVerified(ByVal r As Range) As Boolean
+    Dim sel As Range, a As Range
     If r Is Nothing Then Exit Function
     On Error GoTo Nope
     r.Parent.Parent.Activate
     r.Parent.Activate
     r.Select
-    SelectVerified = (Selection.Address(False, False) = r.Address(False, False))
+    If TypeName(Selection) <> "Range" Then Exit Function
+    Set sel = Selection
+    If Not sel.Parent Is r.Parent Then Exit Function
+    If sel.Areas.Count = r.Areas.Count Then
+        If sel.Address(False, False) = r.Address(False, False) Then SelectVerified = True: Exit Function
+    End If
+    For Each a In r.Areas
+        If Not InsideOneArea(a, sel) Then Exit Function
+    Next a
+    SelectVerified = True
     Exit Function
 Nope:
     SelectVerified = False
+End Function
+
+' True, если прямоугольник a целиком лежит в какой-нибудь ОДНОЙ области outer.
+Private Function InsideOneArea(ByVal a As Range, ByVal outer As Range) As Boolean
+    Dim x As Range, p As Range
+    Set x = Application.Intersect(a, outer)
+    If x Is Nothing Then Exit Function
+    For Each p In x.Areas
+        If p.CountLarge = a.CountLarge Then InsideOneArea = True: Exit Function   ' часть a размером с a - это a
+    Next p
 End Function
 
 ' True, если резервной книги нет или она закрылась; False - осталась открытой (ссылка сохраняется).
@@ -721,46 +815,119 @@ Private Function IsCyrillic(ch As String) As Boolean
     IsCyrillic = (code >= &H400 And code <= &H4FF)
 End Function
 
-' Омоглифы меняются в строке, похожей на код: есть цифра, есть латинская буква, латинских букв не
-' меньше кириллических, и вся кириллица - из набора омоглифов. Русское слово ("ВЕТЕР", "СМР-2",
-' "МОСТ-A") остаётся как есть - и ЗАПОМИНАЕТСЯ по адресу, чтобы попасть в отчёт и в выделение.
-' С флажком "в выделении только коды" проверка отключена: меняется всё, что есть в карте.
-Private Function FixHomoglyphs(s As String, ByRef st As Stats, ByVal onlyCodes As Boolean, ByVal c As Range, ByRef leftCells As Range) As String
-    Dim i As Long, ch As String, nLatin As Long, nCyr As Long, hasDigit As Boolean, n As Long, allMapped As Boolean
+' Омоглифы (v3.1). Решение ПО СЛОВАМ - идея и первая версия: PR #2 (DarthKrya); окончательное
+' правило выбрано на копиях пяти рабочих книг (около 1,6 млн ячеек с кириллицей), а не на
+' придуманных примерах.
+' Слово - кусок между пробелами, разрывами строк и знаками ( ) [ ] { } , ; " « » ' (IsWordBreak).
+' Невидимые (U+200B-200D, 2060, FEFF) границей НЕ считаются: макрос их удаляет, а не делает
+' пробелом, так что "10U<ZWSP>МА" - одно слово. Дефис, точка и косая черта тоже не границы: на них
+' держатся коды (XX.0120.10UМА) и координаты (8Е+15.45/12N+80.45).
+' Слово с кириллицей чинится, если правило кода (есть цифра, есть латиница, латинских не меньше
+' кириллических, вся кириллица из карты) выполняет:
+'  - само слово - код посреди русской фразы: "Опора XX.0120.10UМА" -> "Опора XX.0120.10UMA";
+'  - или вся ячейка, как в v3.0 - английский текст, набранный с кириллическими буквами
+'    ("Air сompressed 12 bar"), оси "А-В" и коды "(КАА)" в латинской ячейке.
+' Русское слово - только кириллица, ни латиницы, ни цифр, и есть СТРОЧНАЯ кириллическая буква - без
+' флажка 5 не трогается НИКОГДА: в v3.0 "Насос XX.0120.10UMA" молча становился "Hacoc ...".
+' Заглавные слова из одной кириллицы (оси, коды систем) чинятся по правилу ячейки, как в v3.0: на
+' рабочих книгах это были только они. Цена: "ВЕТЕР XX.0120.10UMA" (русское слово ЗАГЛАВНЫМИ рядом
+' с длинным кодом) по-прежнему станет "BETEP" - как и в v3.0; слово, приклеенное к коду без
+' пробела ("Насос-XX.0120.10UMA", "4-х/Safety"), - одно слово, и решение по нему общее.
+' Всё, где кириллица осталась, называется и выделяется. С флажком 5 проверок нет: меняется всё,
+' что есть в карте; буквы вне карты называют ячейку.
+' Замена 1:1, длина строки не меняется - правка на месте через Mid$, строка по символу не склеивается.
+Private Function FixHomoglyphs(s As String, ByRef st As Stats, ByVal onlyCodes As Boolean, ByVal c As Range, ByRef leftRuns As CellRuns) As String
+    Dim res As String, n As Long, i As Long, j As Long, p As Long, wStart As Long, code As Long
+    Dim wLat As Long, wCyr As Long, wDigit As Boolean, wMapped As Boolean, wLower As Boolean, ch As String, w As String
+    Dim cLat As Long, cCyr As Long, cDigit As Boolean, cMapped As Boolean, cellOk As Boolean
+    Dim leftHere As Boolean, doFix As Boolean
     FixHomoglyphs = s
-    allMapped = True
-    For i = 1 To Len(s)
+    n = Len(s)
+    ' проход 1 - правило кода по всей ячейке (как в v3.0)
+    cMapped = True
+    For i = 1 To n
         ch = Mid$(s, i, 1)
-        If (ch >= "A" And ch <= "Z") Or (ch >= "a" And ch <= "z") Then
-            nLatin = nLatin + 1
-        ElseIf ch >= "0" And ch <= "9" Then
-            hasDigit = True
-        ElseIf IsCyrillic(ch) Then
-            nCyr = nCyr + 1
-            If InStr(HOMO_FROM, ch) = 0 Then allMapped = False
-        End If
+        code = AscW(ch) And &HFFFF&
+        Select Case code
+            Case 65 To 90, 97 To 122: cLat = cLat + 1
+            Case 48 To 57: cDigit = True
+            Case &H400 To &H4FF
+                cCyr = cCyr + 1
+                If InStr(HOMO_FROM, ch) = 0 Then cMapped = False
+        End Select
     Next i
-    If nCyr = 0 Then Exit Function
-    If Not onlyCodes Then
-        If Not allMapped Or Not hasDigit Or nLatin = 0 Or nLatin < nCyr Then
-            st.cyrLeft = st.cyrLeft + 1
-            AddTo leftCells, c
-            Exit Function
+    If cCyr = 0 Then Exit Function
+    cellOk = cDigit And cLat > 0 And cLat >= cCyr And cMapped
+    ' проход 2 - решение и правка по каждому слову
+    res = s
+    wStart = 1: wMapped = True
+    For i = 1 To n + 1
+        If i <= n Then
+            ch = Mid$(s, i, 1)
+            code = AscW(ch) And &HFFFF&
+            Select Case code
+                Case 65 To 90, 97 To 122
+                    wLat = wLat + 1
+                    GoTo NextChar
+                Case 48 To 57
+                    wDigit = True
+                    GoTo NextChar
+                Case &H400 To &H4FF
+                    wCyr = wCyr + 1
+                    If code >= &H430 And code <= &H45F Then wLower = True
+                    If InStr(HOMO_FROM, ch) = 0 Then wMapped = False
+                    GoTo NextChar
+            End Select
+            If Not IsWordBreak(ch) Then GoTo NextChar
         End If
-    End If
-    For i = 1 To Len(HOMO_FROM)
-        ch = Mid$(HOMO_FROM, i, 1)
-        n = Len(s) - Len(Replace(s, ch, vbNullString))
-        If n > 0 Then
-            st.homoglyphs = st.homoglyphs + n
-            s = Replace(s, ch, Mid$(HOMO_TO, i, 1))
+        ' конец слова s[wStart .. i-1] (пустое слово между двумя границами ничего не меняет)
+        If wCyr > 0 Then
+            If onlyCodes Then
+                doFix = True
+            ElseIf wLat = 0 And Not wDigit And wLower Then
+                doFix = False                                      ' русское слово
+            Else
+                doFix = cellOk Or (wDigit And wLat > 0 And wLat >= wCyr And wMapped)
+            End If
+            If doFix Then
+                w = Mid$(s, wStart, i - wStart)
+                For j = 1 To Len(HOMO_FROM)
+                    p = CountOf(w, Mid$(HOMO_FROM, j, 1))
+                    If p > 0 Then
+                        st.homoglyphs = st.homoglyphs + p
+                        w = Replace(w, Mid$(HOMO_FROM, j, 1), Mid$(HOMO_TO, j, 1))
+                    End If
+                Next j
+                Mid$(res, wStart, Len(w)) = w                      ' длина та же: замена 1:1
+                If Not wMapped Then leftHere = True                ' буквы вне карты (Ж, Ш, У...) остались
+            Else
+                leftHere = True
+            End If
         End If
+        wStart = i + 1: wLat = 0: wCyr = 0: wDigit = False: wMapped = True: wLower = False
+NextChar:
     Next i
-    If onlyCodes And Not allMapped Then   ' буквы вне карты (Ж, Ш, У...) остались - назвать ячейку
+    ' ячейка считается и попадает в выделение ОДИН раз, сколько бы слов в ней ни осталось
+    If leftHere Then
         st.cyrLeft = st.cyrLeft + 1
-        AddTo leftCells, c
+        Collect leftRuns, c
     End If
-    FixHomoglyphs = s
+    FixHomoglyphs = res
+End Function
+
+' Граница слова для омоглифов: всё, что IsSpaceLike, КРОМЕ невидимых (их макрос удаляет, а не
+' превращает в пробел - код с таким мусором внутри остаётся одним словом), и скобки, запятая,
+' точка с запятой, кавычки: на рабочих книгах "(ПУ АС)(99UXX)" без них склеивалось в одно слово,
+' и русское "АС" становилось латинским.
+Private Function IsWordBreak(ByVal ch As String) As Boolean
+    Select Case AscW(ch) And &HFFFF&
+        Case &H200B To &H200D, &H2060, &HFEFF&
+            IsWordBreak = False
+        Case 40, 41, 91, 93, 123, 125, 44, 59, 34, 39, &HAB, &HBB   ' ( ) [ ] { } , ; " ' « »
+            IsWordBreak = True
+        Case Else
+            IsWordBreak = IsSpaceLike(ch)
+    End Select
 End Function
 
 Private Function CountOf(s As String, what As String) As Long
